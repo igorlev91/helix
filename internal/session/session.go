@@ -10,7 +10,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Session is a live WebSocket client session.
 
+// Same two-loop model:
+//
+//	Consume()         - inbound: reads from the socket and dispatches messages
+//	processOutgoing() - outbound: writes queued payloads and sends pings
 type Session struct {
 	ID   uuid.UUID
 	conn *websocket.Conn
@@ -18,14 +23,14 @@ type Session struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
-	outgoingCh chan []byte // очередь исходящих сообщений 
+	outgoingCh chan []byte // outbound queue (Nakama: OutgoingQueueSize)
 	pingPeriod time.Duration
 	pongWait   time.Duration
 	writeWait  time.Duration
 
 	closeOnce sync.Once
-	onMessage func(s *Session, data []byte) 
-	onClose   func(s *Session)              
+	onMessage func(s *Session, data []byte) // the pipeline will land here later
+	onClose   func(s *Session)              // registry removal hook
 }
 
 func New(conn *websocket.Conn, onMessage func(*Session, []byte), onClose func(*Session)) *Session {
@@ -44,7 +49,7 @@ func New(conn *websocket.Conn, onMessage func(*Session, []byte), onClose func(*S
 	}
 }
 
-// Send — неблокирующая отправка в очередь 
+// Send queues an outbound payload without blocking.
 func (s *Session) Send(data []byte) {
 	select {
 	case s.outgoingCh <- data:
@@ -53,15 +58,16 @@ func (s *Session) Send(data []byte) {
 	}
 }
 
-// Consume — главный входящий цикл 
-// Блокируется, пока соединение не закроется.
+// Consume runs the inbound loop and blocks until the connection closes
+
 func (s *Session) Consume() {
 	go s.processOutgoing()
 
 	s.conn.SetReadLimit(64 * 1024)
 	_ = s.conn.SetReadDeadline(time.Now().Add(s.pongWait))
 	s.conn.SetPongHandler(func(string) error {
-		// Клиент ответил на ping — продлеваем read deadline 
+		// Client answered our ping: extend the read deadline
+
 		return s.conn.SetReadDeadline(time.Now().Add(s.pongWait))
 	})
 
@@ -69,7 +75,7 @@ func (s *Session) Consume() {
 	for {
 		_, data, err := s.conn.ReadMessage()
 		if err != nil {
-			// "Нормальные" закрытия не логируем
+			// "Normal" closures are not logged 
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				reason = err.Error()
 			}
@@ -81,7 +87,7 @@ func (s *Session) Consume() {
 	s.Close(reason)
 }
 
-// processOutgoing — исходящий цикл 
+// processOutgoing runs the outbound loop 
 func (s *Session) processOutgoing() {
 	ping := time.NewTicker(s.pingPeriod)
 	defer ping.Stop()
@@ -104,7 +110,7 @@ func (s *Session) processOutgoing() {
 	}
 }
 
-// Close — идемпотентное закрытие
+// Close shuts the session down exactly once 
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
 		if reason != "" {

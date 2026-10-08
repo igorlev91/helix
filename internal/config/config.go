@@ -8,18 +8,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config — единый источник настроек сервера
-// Приоритет: флаги командной строки > YAML-файл > значения по умолчанию.
+// Config is the single source of server settings 
+// Priority: command-line flags > YAML file > defaults.
 type Config struct {
-	Name     string `yaml:"name"`     // имя ноды (в будущем — для кластера)
-	Datadir  string `yaml:"datadir"`  // рабочая директория (данные, модули)
-	Database string `yaml:"database"` // DSN Postgres: user:pass@host:5432/dbname
-	Port     int    `yaml:"port"`     // клиентский порт
-	OpsPort  int    `yaml:"ops_port"` // порт админки/метрик
-	Verbose  bool   `yaml:"verbose"`  // подробное логирование
+	Name     string `yaml:"name"`     // node name (cluster later)
+	Datadir  string `yaml:"datadir"`  // working directory (data, modules)
+	Database string `yaml:"database"` // Postgres DSN: user:pass@host:5432/dbname
+	Port     int    `yaml:"port"`     // client port
+	OpsPort  int    `yaml:"ops_port"` // admin/metrics port
+	Verbose  bool   `yaml:"verbose"`  // verbose logging
 }
 
-// Defaults — конфигурация "из коробки", если ничего не задано.
+// Defaults returns the out-of-the-box configuration.
 func Defaults() *Config {
 	return &Config{
 		Name:     "helix",
@@ -30,15 +30,15 @@ func Defaults() *Config {
 	}
 }
 
-// Load — двухпроходный парсинг
+// Load performs three-pass parsing 
 //
-//	Проход 1: парсим только --config (остальные флаги — в черновые переменные)
-//	Проход 2: грузим YAML поверх Defaults
-//	Проход 3: применяем ТОЛЬКО явно заданные флаги (fs.Visit) поверх файла
+//	Pass 1: parse flags into scratch variables (only --config matters here)
+//	Pass 2: load YAML on top of Defaults
+//	Pass 3: apply ONLY explicitly-set flags (fs.Visit) over the file
 func Load(args []string) (*Config, error) {
 	cfg := Defaults()
 
-	// --- Проход 1: все флаги во временные переменные ---
+	// --- Pass 1: all flags into temporary variables ---
 	var (
 		configPath string
 		fName      string
@@ -49,18 +49,18 @@ func Load(args []string) (*Config, error) {
 		fVerbose   bool
 	)
 	fs := flag.NewFlagSet("helix", flag.ContinueOnError)
-	fs.StringVar(&configPath, "config", "", "путь к config.yml")
-	fs.StringVar(&fName, "name", "", "имя ноды")
-	fs.StringVar(&fDatadir, "datadir", "", "рабочая директория")
-	fs.StringVar(&fDatabase, "database.address", "", "DSN Postgres")
-	fs.IntVar(&fPort, "port", 0, "клиентский порт")
-	fs.IntVar(&fOpsPort, "ops.port", 0, "порт админки")
-	fs.BoolVar(&fVerbose, "verbose", false, "подробные логи")
+	fs.StringVar(&configPath, "config", "", "path to config.yml")
+	fs.StringVar(&fName, "name", "", "node name")
+	fs.StringVar(&fDatadir, "datadir", "", "working directory")
+	fs.StringVar(&fDatabase, "database.address", "", "Postgres DSN")
+	fs.IntVar(&fPort, "port", 0, "client port")
+	fs.IntVar(&fOpsPort, "ops.port", 0, "admin port")
+	fs.BoolVar(&fVerbose, "verbose", false, "verbose logs")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 
-	// --- Проход 2: YAML поверх Defaults ---
+	// --- Pass 2: YAML on top of Defaults ---
 	if configPath != "" {
 		raw, err := os.ReadFile(configPath)
 		if err != nil {
@@ -71,7 +71,7 @@ func Load(args []string) (*Config, error) {
 		}
 	}
 
-	// --- Проход 3: флаги, заданные явно, перекрывают файл ---
+	// --- Pass 3: explicitly-set flags override the file ---
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "name":

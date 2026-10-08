@@ -12,11 +12,13 @@ import (
 
 	"helix/internal/config"
 	"helix/internal/server"
+	"helix/internal/session"
 )
 
-
+// main is a simplified analog of main.go from Nakama v3.27.1.
+// Startup order is the same: CLI -> config -> components -> server -> graceful shutdown.
 func main() {
-
+	// 1. CLI commands (Nakama: migrate / check / healthcheck / --version)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version":
@@ -32,7 +34,7 @@ func main() {
 		}
 	}
 
-
+	// 2. Config: YAML + flags (analog of server.ParseArgs)
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -42,14 +44,17 @@ func main() {
 	log.Printf("Data directory path=%s", cfg.Datadir)
 	log.Printf("Database dsn=%s", cfg.Database)
 
+	// 3. Components (Nakama builds ~25 objects here; we add them step by step)
+	registry := session.NewRegistry()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler())
+	mux.HandleFunc("/ws", server.NewWsHandler(registry))
+	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 
-
+	// 4. HTTP server on the client port (Nakama serves WS+REST on :7350)
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: mux}
 	go func() {
 		log.Printf("Client port=%d", cfg.Port)
@@ -60,7 +65,7 @@ func main() {
 
 	log.Printf("Startup done")
 
-
+	// 5. Graceful shutdown (analog of server/shutdown.go)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
