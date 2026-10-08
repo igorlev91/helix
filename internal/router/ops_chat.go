@@ -10,7 +10,6 @@ import (
 	"helix/internal/tracker"
 )
 
-
 // A "channel" maps to a stream named "chat:<channel>".
 type chatJoinRequest struct {
 	Channel string `json:"channel"`
@@ -40,9 +39,9 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 
 		// Notify the stream about the new presence
 		SendToStream(tr.List(streamName(req.Channel)), "chat.presence", map[string]any{
-			"channel":    req.Channel,
-			"session_id": s.ID.String(),
-			"event":      "join",
+			"channel":  req.Channel,
+			"username": s.Username,
+			"event":    "join",
 		})
 		return map[string]string{"joined": req.Channel}, nil
 	})
@@ -54,9 +53,9 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 		}
 		tr.Leave(streamName(req.Channel), s)
 		SendToStream(tr.List(streamName(req.Channel)), "chat.presence", map[string]any{
-			"channel":    req.Channel,
-			"session_id": s.ID.String(),
-			"event":      "leave",
+			"channel":  req.Channel,
+			"username": s.Username,
+			"event":    "leave",
 		})
 		return map[string]string{"left": req.Channel}, nil
 	})
@@ -70,18 +69,18 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 		// Sender must be in the channel to post to it.
 		for _, member := range tr.List(stream) {
 			if member.ID == s.ID {
-				// Persist before broadcasting 
+				// Persist before broadcasting
 				if db != nil {
 					if _, err := db.ExecContext(context.Background(),
-						`INSERT INTO chat_messages (channel, session_id, text) VALUES ($1, $2, $3)`,
-						req.Channel, s.ID, req.Text); err != nil {
+						`INSERT INTO chat_messages (channel, session_id, user_id, text) VALUES ($1, $2, $3, $4)`,
+						req.Channel, s.ID, s.UserID, req.Text); err != nil {
 						return nil, err
 					}
 				}
 				SendToStream(tr.List(stream), "chat.message", map[string]any{
-					"channel":    req.Channel,
-					"session_id": s.ID.String(),
-					"text":       req.Text,
+					"channel":  req.Channel,
+					"username": s.Username,
+					"text":     req.Text,
 				})
 				return map[string]string{"sent": req.Channel}, nil
 			}
@@ -102,10 +101,11 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 			req.Limit = 20
 		}
 		rows, err := db.QueryContext(context.Background(),
-			`SELECT id, session_id, text, created_at
-			   FROM chat_messages
-			  WHERE channel = $1
-			  ORDER BY id DESC
+			`SELECT m.id, u.username, m.text, m.created_at
+			   FROM chat_messages m
+			   LEFT JOIN users u ON u.id = m.user_id
+			  WHERE m.channel = $1
+			  ORDER BY m.id DESC
 			  LIMIT $2`, req.Channel, req.Limit)
 		if err != nil {
 			return nil, err
@@ -113,16 +113,18 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 		defer rows.Close()
 		type msg struct {
 			ID        int64  `json:"id"`
-			SessionID string `json:"session_id"`
+			Username  string `json:"username"`
 			Text      string `json:"text"`
 			CreatedAt string `json:"created_at"`
 		}
 		out := []msg{}
 		for rows.Next() {
 			var m msg
-			if err := rows.Scan(&m.ID, &m.SessionID, &m.Text, &m.CreatedAt); err != nil {
+			var username sql.NullString
+			if err := rows.Scan(&m.ID, &username, &m.Text, &m.CreatedAt); err != nil {
 				return nil, err
 			}
+			m.Username = username.String
 			out = append(out, m)
 		}
 		return map[string]any{"channel": req.Channel, "messages": out}, nil

@@ -17,7 +17,6 @@ var migrationsFS embed.FS
 //   - SQL files live in migrations/ and are compiled into the binary (go:embed)
 //   - applied versions are recorded in the schema_migrations table
 //   - CLI: `helix migrate up|status`; startup: Check() fails fast if outdated
-//
 func ensureMigrationsTable(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (

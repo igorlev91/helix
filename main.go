@@ -20,7 +20,7 @@ import (
 
 // Startup order is the same: CLI -> config -> components -> server -> graceful shutdown.
 func main() {
-	// 1. CLI commands 
+	// 1. CLI commands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version":
@@ -42,7 +42,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// 2b. Migrate command 
+	// 2b. Migrate command
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		sub := "up"
 		if len(os.Args) > 2 {
@@ -95,10 +95,12 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr))
+	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
+		conn, cfg.Session.EncryptionKey, time.Duration(cfg.Session.TokenExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 
-	// 4. HTTP server on the client port 
+	// 4. HTTP server on the client port
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: mux}
 	go func() {
 		log.Printf("Client port=%d", cfg.Port)
@@ -108,7 +110,6 @@ func main() {
 	}()
 
 	log.Printf("Startup done")
-
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

@@ -9,7 +9,7 @@ import (
 
 // Envelope is the wire format of every client message.
 // Cid correlates a request with its response (the client matches it against a pending promise), Op selects
-// the handler 
+// the handler
 type Envelope struct {
 	Cid  string          `json:"cid,omitempty"`
 	Op   string          `json:"op"`

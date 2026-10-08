@@ -4,3 +4,6 @@ database: postgres:localdb@localhost:5432/helix
 port: 7350
 ops_port: 7351
 verbose: true
+session:
+  encryption_key: defaultencryptionkey  # change in production
+  token_expiry_sec: 3600

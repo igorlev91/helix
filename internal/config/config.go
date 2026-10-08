@@ -8,15 +8,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the single source of server settings 
+// Config is the single source of server settings
 // Priority: command-line flags > YAML file > defaults.
 type Config struct {
-	Name     string `yaml:"name"`     // node name (cluster later)
-	Datadir  string `yaml:"datadir"`  // working directory (data, modules)
-	Database string `yaml:"database"` // Postgres DSN: user:pass@host:5432/dbname
-	Port     int    `yaml:"port"`     // client port
-	OpsPort  int    `yaml:"ops_port"` // admin/metrics port
-	Verbose  bool   `yaml:"verbose"`  // verbose logging
+	Name     string        `yaml:"name"`
+	Datadir  string        `yaml:"datadir"`
+	Database string        `yaml:"database"`
+	Port     int           `yaml:"port"`
+	OpsPort  int           `yaml:"ops_port"`
+	Verbose  bool          `yaml:"verbose"`
+	Session  SessionConfig `yaml:"session"` // auth/token settings
+}
+
+// SessionConfig mirrors session.encryption_key 
+type SessionConfig struct {
+	EncryptionKey  string `yaml:"encryption_key"`
+	TokenExpirySec int    `yaml:"token_expiry_sec"`
 }
 
 // Defaults returns the out-of-the-box configuration.
@@ -27,10 +34,15 @@ func Defaults() *Config {
 		Database: "postgres:localdb@localhost:5432/helix",
 		Port:     7350,
 		OpsPort:  7351,
+		Session: SessionConfig{
+
+			EncryptionKey:  "defaultencryptionkey",
+			TokenExpirySec: 3600,
+		},
 	}
 }
 
-// Load performs three-pass parsing 
+// Load performs three-pass parsing
 //
 //	Pass 1: parse flags into scratch variables (only --config matters here)
 //	Pass 2: load YAML on top of Defaults

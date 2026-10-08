@@ -17,8 +17,10 @@ import (
 //	Consume()         - inbound: reads from the socket and dispatches messages
 //	processOutgoing() - outbound: writes queued payloads and sends pings
 type Session struct {
-	ID   uuid.UUID
-	conn *websocket.Conn
+	ID       uuid.UUID
+	UserID   uuid.UUID // authenticated user (from the JWT, set at /ws upgrade)
+	Username string
+	conn     *websocket.Conn
 
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -33,10 +35,12 @@ type Session struct {
 	onClose   func(s *Session)              // registry removal hook
 }
 
-func New(conn *websocket.Conn, onMessage func(*Session, []byte), onClose func(*Session)) *Session {
+func New(conn *websocket.Conn, userID uuid.UUID, username string, onMessage func(*Session, []byte), onClose func(*Session)) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Session{
 		ID:         uuid.New(),
+		UserID:     userID,
+		Username:   username,
 		conn:       conn,
 		ctx:        ctx,
 		ctxCancel:  cancel,
@@ -75,7 +79,7 @@ func (s *Session) Consume() {
 	for {
 		_, data, err := s.conn.ReadMessage()
 		if err != nil {
-			// "Normal" closures are not logged 
+			// "Normal" closures are not logged
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				reason = err.Error()
 			}
@@ -87,7 +91,7 @@ func (s *Session) Consume() {
 	s.Close(reason)
 }
 
-// processOutgoing runs the outbound loop 
+// processOutgoing runs the outbound loop
 func (s *Session) processOutgoing() {
 	ping := time.NewTicker(s.pingPeriod)
 	defer ping.Stop()
@@ -110,7 +114,7 @@ func (s *Session) processOutgoing() {
 	}
 }
 
-// Close shuts the session down exactly once 
+// Close shuts the session down exactly once
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
 		if reason != "" {
