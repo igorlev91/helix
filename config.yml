@@ -1,0 +1,6 @@
+name: helix-dev
+datadir: data
+database: postgres:localdb@localhost:5432/helix
+port: 7350
+ops_port: 7351
+verbose: true
