@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"helix/internal/config"
+	"helix/internal/server"
 )
 
 
@@ -46,6 +47,7 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/ws", server.NewWsHandler())
 
 
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: mux}
