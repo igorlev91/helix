@@ -12,6 +12,7 @@ import (
 
 	"helix/internal/config"
 	"helix/internal/db"
+	"helix/internal/matchmaker"
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
@@ -88,16 +89,18 @@ func main() {
 	registry := session.NewRegistry()
 	tr := tracker.New()
 	rt := router.New()
+	mm := matchmaker.New(router.NewMatchCallback(tr))
 	rt.RegisterBuiltinOps(registry)
 	rt.RegisterChatOps(tr, conn)
 	rt.RegisterStorageOps(conn)
 	rt.RegisterLeaderboardOps(conn)
+	rt.RegisterMatchmakerOps(mm)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, mm, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
 		conn, cfg.Session.EncryptionKey, time.Duration(cfg.Session.TokenExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))

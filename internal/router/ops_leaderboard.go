@@ -117,7 +117,7 @@ func (r *Router) RegisterLeaderboardOps(db *sql.DB) {
 		return map[string]any{"board": req.Board, "score": score}, nil
 	})
 
-	// leaderboard.list — top N with ranks 
+	// leaderboard.list — top N with ranks
 	// Rank comes from a window function over the board's sort order.
 	r.Register("leaderboard.list", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req lbListRequest
