@@ -9,11 +9,12 @@ import (
 
 	"helix/internal/router"
 	"helix/internal/session"
+	"helix/internal/tracker"
 )
 
 // NewWsHandler returns an HTTP handler that upgrades connections to WebSocket.
 // validate params -> upgrade -> create session -> register -> Consume.
-func NewWsHandler(registry *session.Registry, rt *router.Router) http.HandlerFunc {
+func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tracker) http.HandlerFunc {
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -36,9 +37,10 @@ func NewWsHandler(registry *session.Registry, rt *router.Router) http.HandlerFun
 			func(s *session.Session, data []byte) {
 				rt.Route(s, data)
 			},
-			// onClose: unregister the session.
+			// onClose: unregister the session and untrack it from all streams.
 			func(s *session.Session) {
 				registry.Remove(s.ID)
+				tr.LeaveAll(s)
 				log.Printf("ws session removed, online=%d", registry.Count())
 			},
 		)

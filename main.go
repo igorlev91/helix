@@ -14,6 +14,7 @@ import (
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
+	"helix/internal/tracker"
 )
 
 // Startup order is the same: CLI -> config -> components -> server -> graceful shutdown.
@@ -46,14 +47,16 @@ func main() {
 
 	// 3. Components (Nakama builds ~25 objects here; we add them step by step)
 	registry := session.NewRegistry()
+	tr := tracker.New()
 	rt := router.New()
 	rt.RegisterBuiltinOps(registry)
+	rt.RegisterChatOps(tr)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt))
+	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 
 	// 4. HTTP server on the client port 

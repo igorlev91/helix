@@ -23,7 +23,7 @@ type Session struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
-	outgoingCh chan []byte // outbound queue (Nakama: OutgoingQueueSize)
+	outgoingCh chan []byte // outbound queue
 	pingPeriod time.Duration
 	pongWait   time.Duration
 	writeWait  time.Duration

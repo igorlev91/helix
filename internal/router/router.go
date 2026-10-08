@@ -33,6 +33,24 @@ func (r *Router) Register(op string, h Handler) {
 	r.handlers[op] = h
 }
 
+// SendToStream pushes an envelope to every session in a stream.
+func SendToStream(sessions []*session.Session, op string, data any) {
+	if len(sessions) == 0 {
+		return
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	payload, err := json.Marshal(Envelope{Op: op, Data: raw})
+	if err != nil {
+		return
+	}
+	for _, s := range sessions {
+		s.Send(payload)
+	}
+}
+
 // Route parses one inbound payload, dispatches it and replies with the
 // same Cid so the client can match the response to its request.
 func (r *Router) Route(s *session.Session, payload []byte) {
