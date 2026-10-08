@@ -91,6 +91,7 @@ func main() {
 	rt.RegisterBuiltinOps(registry)
 	rt.RegisterChatOps(tr, conn)
 	rt.RegisterStorageOps(conn)
+	rt.RegisterLeaderboardOps(conn)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

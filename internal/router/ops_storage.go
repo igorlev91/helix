@@ -16,7 +16,6 @@ import (
 // Storage ops
 // Object identity is (collection, key, user_id); value is arbitrary JSON.
 
-
 type storageWriteRequest struct {
 	Collection      string          `json:"collection"`
 	Key             string          `json:"key"`
