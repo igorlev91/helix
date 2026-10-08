@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"helix/internal/config"
+	"helix/internal/db"
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
@@ -19,7 +20,7 @@ import (
 
 // Startup order is the same: CLI -> config -> components -> server -> graceful shutdown.
 func main() {
-	// 1. CLI commands (Nakama: migrate / check / healthcheck / --version)
+	// 1. CLI commands 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version":
@@ -35,22 +36,60 @@ func main() {
 		}
 	}
 
-	// 2. Config: YAML + flags (analog of server.ParseArgs)
+	// 2. Config: YAML + flags
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+
+	// 2b. Migrate command 
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		sub := "up"
+		if len(os.Args) > 2 {
+			sub = os.Args[2]
+		}
+		conn, err := db.Connect(context.Background(), cfg.Database)
+		if err != nil {
+			log.Fatalf("database: %v", err)
+		}
+		defer conn.Close()
+		switch sub {
+		case "up":
+			err = db.Up(context.Background(), conn)
+		case "status":
+			err = db.Status(context.Background(), conn)
+		default:
+			log.Fatalf("unknown migrate command: %s", sub)
+		}
+		if err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+		log.Printf("migrate %s done", sub)
+		return
+	}
+
 	log.Printf("Helix starting")
 	log.Printf("Node name=%s verbose=%v", cfg.Name, cfg.Verbose)
 	log.Printf("Data directory path=%s", cfg.Datadir)
 	log.Printf("Database dsn=%s", cfg.Database)
 
-	// 3. Components (Nakama builds ~25 objects here; we add them step by step)
+	// 2c. Connect to the database and verify the schema
+	conn, err := db.Connect(context.Background(), cfg.Database)
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer conn.Close()
+	if err := db.Check(context.Background(), conn); err != nil {
+		log.Fatalf("schema: %v", err)
+	}
+	log.Printf("Database connected")
+
+	// 3. Components
 	registry := session.NewRegistry()
 	tr := tracker.New()
 	rt := router.New()
 	rt.RegisterBuiltinOps(registry)
-	rt.RegisterChatOps(tr)
+	rt.RegisterChatOps(tr, conn)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
