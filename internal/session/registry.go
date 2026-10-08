@@ -7,7 +7,6 @@ import (
 )
 
 // Registry tracks online sessions.
-// Simplified analog of session_registry.go from Nakama:
 // Add on connect, Remove on disconnect, lookup by ID.
 type Registry struct {
 	mu       sync.RWMutex

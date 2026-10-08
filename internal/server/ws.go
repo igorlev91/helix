@@ -7,12 +7,13 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"helix/internal/router"
 	"helix/internal/session"
 )
 
 // NewWsHandler returns an HTTP handler that upgrades connections to WebSocket.
 // validate params -> upgrade -> create session -> register -> Consume.
-func NewWsHandler(registry *session.Registry) http.HandlerFunc {
+func NewWsHandler(registry *session.Registry, rt *router.Router) http.HandlerFunc {
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -31,9 +32,9 @@ func NewWsHandler(registry *session.Registry) http.HandlerFunc {
 		log.Printf("ws client connected from %s", r.RemoteAddr)
 
 		s := session.New(conn,
-			// onMessage: echo for now; the pipeline lands here later.
+			// onMessage: dispatch through the router 
 			func(s *session.Session, data []byte) {
-				s.Send(data)
+				rt.Route(s, data)
 			},
 			// onClose: unregister the session.
 			func(s *session.Session) {
@@ -46,7 +47,7 @@ func NewWsHandler(registry *session.Registry) http.HandlerFunc {
 		registry.Add(s)
 		log.Printf("ws session registered %s, online=%d", s.ID, registry.Count())
 
-		// Block until the session closes (Nakama: session.Consume()).
+		// Block until the session closes 
 		s.Consume()
 	}
 }
