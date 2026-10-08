@@ -20,7 +20,7 @@ type Config struct {
 	Session  SessionConfig `yaml:"session"` // auth/token settings
 }
 
-// SessionConfig mirrors session.encryption_key 
+// SessionConfig mirrors session.encryption_key
 type SessionConfig struct {
 	EncryptionKey  string `yaml:"encryption_key"`
 	TokenExpirySec int    `yaml:"token_expiry_sec"`

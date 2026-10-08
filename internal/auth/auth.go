@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
 type TokenClaims struct {
 	UserID   string `json:"uid"`
 	Username string `json:"usn"`

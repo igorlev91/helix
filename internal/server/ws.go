@@ -25,7 +25,7 @@ func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tra
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Auth: Bearer header or ?token= 
+		// Auth: Bearer header or ?token=
 		token := r.URL.Query().Get("token")
 		if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 			token = strings.TrimPrefix(header, "Bearer ")

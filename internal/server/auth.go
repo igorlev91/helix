@@ -15,7 +15,7 @@ import (
 )
 
 // POST /auth/device: authenticate (or create) a user by device id and return
-// a session token. 
+// a session token.
 func NewAuthDeviceHandler(db *sql.DB, secret string, tokenTTL time.Duration) http.HandlerFunc {
 	type request struct {
 		DeviceID string `json:"device_id"`
@@ -54,7 +54,7 @@ func NewAuthDeviceHandler(db *sql.DB, secret string, tokenTTL time.Duration) htt
 				http.Error(w, "user not found", http.StatusUnauthorized)
 				return
 			}
-			// Create the account 
+			// Create the account
 			userID = uuid.New()
 			username = req.Username
 			if username == "" {
@@ -89,7 +89,6 @@ func NewAuthDeviceHandler(db *sql.DB, secret string, tokenTTL time.Duration) htt
 		})
 	}
 }
-
 
 func randomUsername() string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

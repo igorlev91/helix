@@ -90,6 +90,7 @@ func main() {
 	rt := router.New()
 	rt.RegisterBuiltinOps(registry)
 	rt.RegisterChatOps(tr, conn)
+	rt.RegisterStorageOps(conn)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
