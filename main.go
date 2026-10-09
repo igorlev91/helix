@@ -10,10 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"helix/internal/config"
 	"helix/internal/db"
 	"helix/internal/match"
 	"helix/internal/matchmaker"
+	"helix/internal/notify"
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
@@ -90,6 +93,7 @@ func main() {
 	registry := session.NewRegistry()
 	tr := tracker.New()
 	rt := router.New()
+	notifier := notify.New(conn, registry)
 	// Authoritative matches; when a race ends, the winner's leaderboard
 	// score is incremented server-side (clients cannot write scores).
 	matches := match.NewRegistry(func(m *match.Match) {
@@ -113,8 +117,13 @@ func main() {
 				res.UserID, res.Username)
 			if err != nil {
 				log.Printf("leaderboard write for match %s failed: %v", m.ID, err)
-			} else {
-				log.Printf("match %s: +1 race_wins for %s", m.ID, res.Username)
+				continue
+			}
+			log.Printf("match %s: +1 race_wins for %s", m.ID, res.Username)
+			// Persistent victory notification: survives reconnect
+			if uid, err := uuid.Parse(res.UserID); err == nil {
+				_ = notifier.Send(context.Background(), uid,
+					"Race won!", 1, map[string]any{"match_id": m.ID, "rank": 1}, true, nil)
 			}
 		}
 	})
@@ -125,6 +134,7 @@ func main() {
 	rt.RegisterLeaderboardOps(conn)
 	rt.RegisterMatchmakerOps(mm)
 	rt.RegisterMatchOps(matches)
+	rt.RegisterNotifyOps(notifier)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

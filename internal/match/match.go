@@ -94,7 +94,7 @@ func (m *Match) Has(s *session.Session) bool {
 	return ok
 }
 
-// InputCh exposes the serialized input channel 
+// InputCh exposes the serialized input channel
 func (m *Match) InputCh() chan DataMessage {
 	return m.in
 }
@@ -104,7 +104,7 @@ func (m *Match) Handler() Handler {
 	return m.handler
 }
 
-// Broadcast sends one payload to every presence 
+// Broadcast sends one payload to every presence
 func (m *Match) Broadcast(payload []byte) {
 	for _, s := range m.Presences() {
 		s.Send(payload)

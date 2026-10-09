@@ -37,6 +37,21 @@ func auth(deviceID, username string) string {
 	return out.Token
 }
 
+func userID(deviceID string) string {
+	body := fmt.Sprintf(`{"device_id":%q}`, deviceID)
+	resp, err := http.Post("http://localhost:7350/auth/device", "application/json", strings.NewReader(body))
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var out struct {
+		UserID string `json:"user_id"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.UserID
+}
+
 func dial(name, token string) *client {
 	c, _, err := websocket.DefaultDialer.Dial("ws://localhost:7350/ws?token="+token, nil)
 	if err != nil {
@@ -100,6 +115,39 @@ func main() {
 	}
 
 	switch scenario {
+	case "notify":
+		// Bob gets a PERSISTENT notification while offline.
+		bobID := userID("dev-bob")
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		alice.send("1", "notification.send", map[string]any{
+			"user_id": bobID, "subject": "friend request", "code": 10,
+			"content": map[string]string{"from": "Alice"}, "persistent": true,
+		})
+		_, ok := alice.waitFor("notification.send", 2*time.Second)
+		expect("send persisted", ok, "")
+
+		// Bob connects later -> reads it from the list (was offline at send time).
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		bob.send("2", "notification.list", map[string]int{"limit": 5})
+		list, ok := bob.waitFor("notification.list", 2*time.Second)
+		found := ok && strings.Contains(fmt.Sprint(list["data"]), "friend request")
+		expect("offline notification listed on reconnect", found, "")
+
+		// Live-only notification while Bob IS online -> pushed instantly.
+		alice.send("3", "notification.send", map[string]any{
+			"user_id": bobID, "subject": "you are online!", "code": 0,
+			"content": map[string]bool{}, "persistent": false,
+		})
+		push, ok := bob.waitFor("notification", 2*time.Second)
+		expect("live push received", ok, fmt.Sprint(push["data"]))
+
+		// Live-only is NOT persisted.
+		bob.send("4", "notification.list", map[string]int{"limit": 10})
+		list2, _ := bob.waitFor("notification.list", 2*time.Second)
+		expect("live-only not persisted", !strings.Contains(fmt.Sprint(list2["data"]), "you are online"), "")
+		alice.conn.Close()
+		bob.conn.Close()
+
 	case "race":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		cheater := dial("Cheater", auth("dev-cheater", "Cheater"))

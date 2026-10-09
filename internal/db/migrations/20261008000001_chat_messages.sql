@@ -1,4 +1,4 @@
--- Chat message history, simplified analog of Nakama's channel message storage
+-- Chat message history
 -- (message history lives in the "message" table there; see core_channel.go).
 CREATE TABLE IF NOT EXISTS chat_messages (
     id         BIGSERIAL PRIMARY KEY,
