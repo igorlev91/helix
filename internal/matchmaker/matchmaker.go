@@ -16,12 +16,12 @@ type Ticket struct {
 }
 
 // Matchmaker is a FIFO ticket queue that forms matches when enough
-// compatible tickets are waiting. 
+// compatible tickets are waiting.
 type Matchmaker struct {
 	mu      sync.Mutex
 	tickets []*Ticket // FIFO order
 
-	// onMatch is called with the formed group 
+	// onMatch is called with the formed group
 	onMatch func(tickets []*Ticket, matchID string)
 }
 
@@ -42,7 +42,7 @@ func (m *Matchmaker) Add(t *Ticket) {
 	m.tryMatchLocked()
 }
 
-// Remove cancels a session's ticket 
+// Remove cancels a session's ticket
 func (m *Matchmaker) Remove(sessionID uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

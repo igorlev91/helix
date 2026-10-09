@@ -12,6 +12,7 @@ import (
 
 	"helix/internal/config"
 	"helix/internal/db"
+	"helix/internal/match"
 	"helix/internal/matchmaker"
 	"helix/internal/router"
 	"helix/internal/server"
@@ -89,18 +90,47 @@ func main() {
 	registry := session.NewRegistry()
 	tr := tracker.New()
 	rt := router.New()
-	mm := matchmaker.New(router.NewMatchCallback(tr))
+	// Authoritative matches; when a race ends, the winner's leaderboard
+	// score is incremented server-side (clients cannot write scores).
+	matches := match.NewRegistry(func(m *match.Match) {
+		rh, ok := m.Handler().(*match.RaceHandler)
+		if !ok {
+			return
+		}
+		_, _ = conn.ExecContext(context.Background(),
+			`INSERT INTO leaderboards (id, sort_order, operator) VALUES ('race_wins', 1, 2)
+			 ON CONFLICT (id) DO NOTHING`)
+		for _, res := range rh.Results() {
+			if res.Rank != 1 {
+				continue
+			}
+			_, err := conn.ExecContext(context.Background(),
+				`INSERT INTO leaderboard_records (leaderboard_id, owner_id, username, score, update_time)
+				 VALUES ('race_wins', $1, $2, 1, now())
+				 ON CONFLICT (leaderboard_id, owner_id)
+				 DO UPDATE SET score = leaderboard_records.score + 1, username = $2,
+				               update_time = now(), num_score = leaderboard_records.num_score + 1`,
+				res.UserID, res.Username)
+			if err != nil {
+				log.Printf("leaderboard write for match %s failed: %v", m.ID, err)
+			} else {
+				log.Printf("match %s: +1 race_wins for %s", m.ID, res.Username)
+			}
+		}
+	})
+	mm := matchmaker.New(router.NewMatchCallback(tr, matches))
 	rt.RegisterBuiltinOps(registry)
 	rt.RegisterChatOps(tr, conn)
 	rt.RegisterStorageOps(conn)
 	rt.RegisterLeaderboardOps(conn)
 	rt.RegisterMatchmakerOps(mm)
+	rt.RegisterMatchOps(matches)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, mm, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, mm, matches, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
 		conn, cfg.Session.EncryptionKey, time.Duration(cfg.Session.TokenExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))

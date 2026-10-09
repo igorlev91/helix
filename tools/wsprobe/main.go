@@ -100,6 +100,42 @@ func main() {
 	}
 
 	switch scenario {
+	case "race":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		cheater := dial("Cheater", auth("dev-cheater", "Cheater"))
+
+		alice.send("1", "matchmaker.add", map[string]int{"min": 2, "max": 2})
+		cheater.send("2", "matchmaker.add", map[string]int{"min": 2, "max": 2})
+		mA, okA := alice.waitFor("match.found", 2*time.Second)
+		mC, okC := cheater.waitFor("match.found", 2*time.Second)
+		expect("race: both matched", okA && okC, "")
+		matchID, _ := mA["data"].(map[string]any)["match_id"].(string)
+		_ = mC
+
+		start := time.Now()
+		// Honest player: move 1.0 every 150 ms (6.6 u/s, under the 8 u/s cap).
+		go func() {
+			for range 200 {
+				alice.send("m", "match.data", map[string]any{"match_id": matchID, "data": map[string]float64{"move": 1.0}})
+				time.Sleep(150 * time.Millisecond)
+			}
+		}()
+		// Cheater: move=999 as fast as possible (must still be capped to 8 u/s).
+		go func() {
+			for range 500 {
+				cheater.send("x", "match.data", map[string]any{"match_id": matchID, "data": map[string]float64{"move": 999.0}})
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
+
+		// The earliest legit finish at 8 u/s over 100 units is 12.5 s.
+		fin, ok := cheater.waitFor("race.finish", 30*time.Second)
+		elapsed := time.Since(start)
+		expect("race finished", ok, fmt.Sprint(fin["data"]))
+		expect("speed cap enforced (>=12s)", elapsed >= 12*time.Second, elapsed.Round(time.Millisecond).String())
+		alice.conn.Close()
+		cheater.conn.Close()
+
 	case "match":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

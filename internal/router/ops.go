@@ -8,7 +8,6 @@ import (
 
 // RegisterBuiltinOps installs the built-in ops.
 func (r *Router) RegisterBuiltinOps(registry *session.Registry) {
-	// ping -> pong (Nakama: the client heartbeat op)
 	r.Register("ping", func(s *session.Session, data json.RawMessage) (any, error) {
 		return map[string]string{"pong": "ok"}, nil
 	})

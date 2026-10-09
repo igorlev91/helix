@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"helix/internal/auth"
+	"helix/internal/match"
 	"helix/internal/matchmaker"
 	"helix/internal/router"
 	"helix/internal/session"
@@ -18,7 +19,7 @@ import (
 
 // NewWsHandler returns an HTTP handler that upgrades connections to WebSocket.
 // validate token -> upgrade -> create session -> register -> Consume.
-func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, secret string) http.HandlerFunc {
+func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, matches *match.Registry, secret string) http.HandlerFunc {
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -55,11 +56,16 @@ func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tra
 			func(s *session.Session, data []byte) {
 				rt.Route(s, data)
 			},
-			// onClose: unregister, untrack from streams, cancel matchmaking ticket.
+			// onClose: unregister, untrack, cancel matchmaking, leave the match.
 			func(s *session.Session) {
 				registry.Remove(s.ID)
 				tr.LeaveAll(s)
 				mm.Remove(s.ID)
+				if s.MatchID != "" {
+					if m, ok := matches.Get(s.MatchID); ok {
+						m.RemovePresence(s.ID)
+					}
+				}
 				log.Printf("ws session removed, online=%d", registry.Count())
 			},
 		)
