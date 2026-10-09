@@ -48,3 +48,43 @@ func Parse(secret, tokenString string) (*TokenClaims, bool) {
 	}
 	return claims, true
 }
+
+
+type RefreshClaims struct {
+	UserID   string `json:"uid"`
+	Username string `json:"usn"`
+	Type     string `json:"typ"`
+	jwt.RegisteredClaims
+}
+
+// GenerateRefresh signs a refresh token
+func GenerateRefresh(secret string, userID uuid.UUID, username string, ttl time.Duration) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &RefreshClaims{
+		UserID:   userID.String(),
+		Username: username,
+		Type:     "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
+			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
+		},
+	})
+	return token.SignedString([]byte(secret))
+}
+
+// ParseRefresh validates a refresh token 
+func ParseRefresh(secret, tokenString string) (*RefreshClaims, bool) {
+	parsed, err := jwt.ParseWithClaims(tokenString, &RefreshClaims{},
+		func(t *jwt.Token) (any, error) { return []byte(secret), nil },
+		jwt.WithExpirationRequired(),
+		jwt.WithValidMethods([]string{"HS256"}),
+	)
+	if err != nil {
+		return nil, false
+	}
+	claims, ok := parsed.Claims.(*RefreshClaims)
+	if !ok || !parsed.Valid || claims.Type != "refresh" {
+		return nil, false
+	}
+	return claims, true
+}

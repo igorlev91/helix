@@ -92,8 +92,9 @@ func main() {
 	// 3. Components
 	registry := session.NewRegistry()
 	tr := tracker.New()
-	rt := router.New()
 	notifier := notify.New(conn, registry)
+	hooks := registerGameHooks(notifier)
+	rt := router.New(hooks)
 	// Authoritative matches; when a race ends, the winner's leaderboard
 	// score is incremented server-side (clients cannot write scores).
 	matches := match.NewRegistry(func(m *match.Match) {
@@ -136,6 +137,7 @@ func main() {
 	rt.RegisterMatchOps(matches)
 	rt.RegisterNotifyOps(notifier)
 	rt.RegisterFriendOps(conn, registry, notifier)
+	rt.RegisterGroupOps(conn)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +145,12 @@ func main() {
 	})
 	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, mm, matches, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
-		conn, cfg.Session.EncryptionKey, time.Duration(cfg.Session.TokenExpirySec)*time.Second))
+		conn, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
+		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
+	mux.HandleFunc("/auth/refresh", server.NewAuthRefreshHandler(
+		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		time.Duration(cfg.Session.TokenExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 
 	// 4. HTTP server on the client port

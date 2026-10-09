@@ -16,17 +16,18 @@ import (
 
 // POST /auth/device: authenticate (or create) a user by device id and return
 // a session token.
-func NewAuthDeviceHandler(db *sql.DB, secret string, tokenTTL time.Duration) http.HandlerFunc {
+func NewAuthDeviceHandler(db *sql.DB, secret, refreshSecret string, tokenTTL, refreshTTL time.Duration) http.HandlerFunc {
 	type request struct {
 		DeviceID string `json:"device_id"`
 		Username string `json:"username,omitempty"`
 		Create   *bool  `json:"create,omitempty"`
 	}
 	type response struct {
-		Token    string `json:"token"`
-		UserID   string `json:"user_id"`
-		Username string `json:"username"`
-		Created  bool   `json:"created"`
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"` // Nakama: api.Session.refresh_token
+		UserID       string `json:"user_id"`
+		Username     string `json:"username"`
+		Created      bool   `json:"created"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -79,14 +80,60 @@ func NewAuthDeviceHandler(db *sql.DB, secret string, tokenTTL time.Duration) htt
 			http.Error(w, "could not sign token", http.StatusInternalServerError)
 			return
 		}
+		refresh, err := auth.GenerateRefresh(refreshSecret, userID, username, refreshTTL)
+		if err != nil {
+			http.Error(w, "could not sign refresh token", http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response{
-			Token:    token,
-			UserID:   userID.String(),
-			Username: username,
-			Created:  created,
+			Token:        token,
+			RefreshToken: refresh,
+			UserID:       userID.String(),
+			Username:     username,
+			Created:      created,
 		})
+	}
+}
+
+// POST /auth/refresh: exchange a refresh token for a new session token.
+// Analog of ApiServer.SessionRefresh in Nakama (server/api_session.go).
+func NewAuthRefreshHandler(secret, refreshSecret string, tokenTTL time.Duration) http.HandlerFunc {
+	type request struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	type response struct {
+		Token string `json:"token"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+			http.Error(w, "refresh_token required", http.StatusBadRequest)
+			return
+		}
+		claims, ok := auth.ParseRefresh(refreshSecret, req.RefreshToken)
+		if !ok {
+			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+			return
+		}
+		userID, err := uuid.Parse(claims.UserID)
+		if err != nil {
+			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+			return
+		}
+		token, _, err := auth.Generate(secret, userID, claims.Username, tokenTTL)
+		if err != nil {
+			http.Error(w, "could not sign token", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response{Token: token})
 	}
 }
 

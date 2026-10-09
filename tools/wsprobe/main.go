@@ -84,6 +84,11 @@ func (c *client) send(cid, op string, data any) {
 
 // waitFor returns the first message whose op matches, within the timeout.
 func (c *client) waitFor(op string, timeout time.Duration) (map[string]any, bool) {
+	return c.waitForMatch(op, timeout, "")
+}
+
+// waitForMatch additionally requires the payload to contain a substring.
+func (c *client) waitForMatch(op string, timeout time.Duration, contains string) (map[string]any, bool) {
 	deadline := time.After(timeout)
 	for {
 		select {
@@ -91,7 +96,7 @@ func (c *client) waitFor(op string, timeout time.Duration) (map[string]any, bool
 			if !ok {
 				return nil, false
 			}
-			if msg["op"] == op {
+			if msg["op"] == op && (contains == "" || strings.Contains(fmt.Sprint(msg["data"]), contains)) {
 				return msg, true
 			}
 		case <-deadline:
@@ -115,6 +120,83 @@ func main() {
 	}
 
 	switch scenario {
+	case "hooks":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+
+		alice.send("1", "chat.join", map[string]string{"channel": "mod"})
+		alice.waitFor("chat.join", 2*time.Second)
+		bob.send("2", "chat.join", map[string]string{"channel": "mod"})
+		bob.waitFor("chat.join", 2*time.Second)
+
+		// 1. Clean message passes the moderation before-hook.
+		alice.send("3", "chat.send", map[string]string{"channel": "mod", "text": "good race!"})
+		alice.waitFor("chat.send", 2*time.Second) // drain own ack
+		_, ok := bob.waitFor("chat.message", 2*time.Second)
+		expect("clean message passes hook", ok, "")
+
+		// 2. Banned word -> before-hook rejects, Bob receives nothing.
+		alice.send("4", "chat.send", map[string]string{"channel": "mod", "text": "buy my spam here"})
+		r, _ := alice.waitForMatch("chat.send", 2*time.Second, "error")
+		expect("hook rejects spam", strings.Contains(fmt.Sprint(r["data"]), "rejected by runtime hook"), fmt.Sprint(r["data"]))
+		_, ok = bob.waitFor("chat.message", 600*time.Millisecond)
+		expect("bob got nothing", !ok, "")
+
+		// 3. Game-code RPC op.
+		alice.send("5", "daily_reward", map[string]bool{})
+		rw, ok := alice.waitFor("daily_reward", 2*time.Second)
+		expect("RPC daily_reward works", ok && strings.Contains(fmt.Sprint(rw["data"]), "coins"), fmt.Sprint(rw["data"]))
+
+		// 4. RPC that pushes a live notification back to the caller.
+		alice.send("6", "ping_me", map[string]bool{})
+		n, ok := alice.waitFor("notification", 2*time.Second)
+		expect("RPC pushed notification", ok && strings.Contains(fmt.Sprint(n["data"]), "pong from RPC"), fmt.Sprint(n["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+
+	case "groups":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+
+		// 1. Alice creates a closed clan.
+		alice.send("1", "group.create", map[string]any{"name": "BullRiders", "description": "race clan", "open": false, "max_count": 10})
+		c, ok := alice.waitFor("group.create", 2*time.Second)
+		expect("group created", ok, fmt.Sprint(c["data"]))
+		gid, _ := c["data"].(map[string]any)["group_id"].(string)
+
+		// 2. Bob joins closed group -> join_request(3), edge_count unchanged.
+		bob.send("2", "group.join", map[string]string{"group_id": gid})
+		j, _ := bob.waitFor("group.join", 2*time.Second)
+		expect("bob join_request(3)", strings.Contains(fmt.Sprint(j["data"]), "state:3"), fmt.Sprint(j["data"]))
+
+		// 3. Alice (superadmin) accepts Bob -> member(2).
+		alice.send("3", "group.accept", map[string]string{"group_id": gid, "username": "Bob"})
+		a, _ := alice.waitFor("group.accept", 2*time.Second)
+		expect("alice accepts bob", strings.Contains(fmt.Sprint(a["data"]), "accepted"), fmt.Sprint(a["data"]))
+
+		// 4. Members list shows both with states.
+		bob.send("4", "group.members", map[string]string{"group_id": gid})
+		m, _ := bob.waitFor("group.members", 2*time.Second)
+		expect("members: superadmin+member", strings.Contains(fmt.Sprint(m["data"]), "state:0") && strings.Contains(fmt.Sprint(m["data"]), "state:2"), fmt.Sprint(m["data"]))
+
+		// 5. Bob can't accept (not admin).
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+		carol.send("5", "group.join", map[string]string{"group_id": gid})
+		carol.waitFor("group.join", 2*time.Second)
+		bob.send("6", "group.accept", map[string]string{"group_id": gid, "username": "Carol"})
+		r, _ := bob.waitFor("group.accept", 2*time.Second)
+		expect("bob not admin -> rejected", strings.Contains(fmt.Sprint(r["data"]), "admin rights required"), fmt.Sprint(r["data"]))
+
+		// 6. group.list search.
+		carol.send("7", "group.list", map[string]string{"name": "bull"})
+		l, _ := carol.waitFor("group.list", 2*time.Second)
+		expect("search finds BullRiders", strings.Contains(fmt.Sprint(l["data"]), "BullRiders"), fmt.Sprint(l["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
 	case "friends":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

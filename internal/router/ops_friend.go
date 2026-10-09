@@ -13,6 +13,7 @@ import (
 )
 
 // Friend ops, simplified analog of core_friend.go in Nakama.
+//
 //	0 = friend (mutual), 1 = invite_sent, 2 = invite_received, 3 = blocked
 const (
 	stateFriend         = 0

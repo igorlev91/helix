@@ -20,10 +20,12 @@ type Config struct {
 	Session  SessionConfig `yaml:"session"` // auth/token settings
 }
 
-// SessionConfig mirrors session.encryption_key
+// SessionConfig mirrors session.*
 type SessionConfig struct {
-	EncryptionKey  string `yaml:"encryption_key"`
-	TokenExpirySec int    `yaml:"token_expiry_sec"`
+	EncryptionKey        string `yaml:"encryption_key"`
+	RefreshEncryptionKey string `yaml:"refresh_encryption_key"`
+	TokenExpirySec       int    `yaml:"token_expiry_sec"`
+	RefreshExpirySec     int    `yaml:"refresh_token_expiry_sec"`
 }
 
 // Defaults returns the out-of-the-box configuration.
@@ -35,9 +37,11 @@ func Defaults() *Config {
 		Port:     7350,
 		OpsPort:  7351,
 		Session: SessionConfig{
-
-			EncryptionKey:  "defaultencryptionkey",
-			TokenExpirySec: 3600,
+			// Nakama ships with "defaultencryptionkey" and warns to change it.
+			EncryptionKey:        "defaultencryptionkey",
+			RefreshEncryptionKey: "defaultrefreshencryptionkey",
+			TokenExpirySec:       3600,
+			RefreshExpirySec:     86400,
 		},
 	}
 }

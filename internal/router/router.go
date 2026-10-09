@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 
+	"helix/internal/runtime"
 	"helix/internal/session"
 )
 
@@ -23,10 +24,14 @@ type Handler func(s *session.Session, data json.RawMessage) (any, error)
 // Router dispatches inbound envelopes to handlers by op.
 type Router struct {
 	handlers map[string]Handler
+	hooks    *runtime.Hooks
 }
 
-func New() *Router {
-	return &Router{handlers: make(map[string]Handler)}
+func New(hooks *runtime.Hooks) *Router {
+	if hooks == nil {
+		hooks = runtime.New()
+	}
+	return &Router{handlers: make(map[string]Handler), hooks: hooks}
 }
 
 func (r *Router) Register(op string, h Handler) {
@@ -53,10 +58,27 @@ func SendToStream(sessions []*session.Session, op string, data any) {
 
 // Route parses one inbound payload, dispatches it and replies with the
 // same Cid so the client can match the response to its request.
+//
+// Order (mirrors Nakama's runtime pipeline):
+//  1. runtime RPC op? -> game code handles it entirely
+//  2. before-hooks (may reject or rewrite the payload)
+//  3. built-in handler
+//  4. after-hooks (observe, never change the response)
 func (r *Router) Route(s *session.Session, payload []byte) {
 	var in Envelope
 	if err := json.Unmarshal(payload, &in); err != nil {
 		reply(s, "", in.Op, map[string]string{"error": "malformed payload"})
+		return
+	}
+
+	// 1. Game-code RPC ops shadow everything (Nakama: Envelope_Rpc).
+	if fn, ok := r.hooks.Rpc(in.Op); ok {
+		out, err := fn(s, in.Data)
+		if err != nil {
+			reply(s, in.Cid, in.Op, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(s, in.Cid, in.Op, out)
 		return
 	}
 
@@ -66,7 +88,19 @@ func (r *Router) Route(s *session.Session, payload []byte) {
 		return
 	}
 
-	out, err := h(s, in.Data)
+	// 2. Before-hooks (may reject or rewrite the payload).
+	data, err := r.hooks.RunBefore(s, in.Op, in.Data)
+	if err != nil {
+		reply(s, in.Cid, in.Op, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// 3. Built-in handler.
+	out, err := h(s, data)
+
+	// 4. After-hooks (side effects only, never change the response).
+	r.hooks.RunAfter(s, in.Op, data, out, err)
+
 	if err != nil {
 		log.Printf("router: op=%s failed: %v", in.Op, err)
 		reply(s, in.Cid, in.Op, map[string]string{"error": err.Error()})
