@@ -55,7 +55,7 @@ func (r *Registry) IDs() []uuid.UUID {
 }
 
 // ByUser returns all online sessions of a user (a user may have several
-// devices connected). 
+// devices connected).
 func (r *Registry) ByUser(userID uuid.UUID) []*Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

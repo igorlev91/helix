@@ -24,7 +24,7 @@ func New(db *sql.DB, registry *session.Registry) *Notifier {
 }
 
 // Send stores (optionally) and pushes a notification to all online
-// sessions of the user 
+// sessions of the user
 func (n *Notifier) Send(ctx context.Context, userID uuid.UUID, subject string, code int, content any, persistent bool, senderID *uuid.UUID) error {
 	raw, err := json.Marshal(content)
 	if err != nil {

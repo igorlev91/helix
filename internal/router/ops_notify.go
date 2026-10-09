@@ -13,7 +13,7 @@ import (
 
 // Notification ops
 // In production, notification.send is a server-side call (runtime code);
-// exposing it as an op here keeps it testable. 
+// exposing it as an op here keeps it testable.
 
 type notifySendRequest struct {
 	UserID     string          `json:"user_id"`

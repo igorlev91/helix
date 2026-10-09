@@ -135,6 +135,7 @@ func main() {
 	rt.RegisterMatchmakerOps(mm)
 	rt.RegisterMatchOps(matches)
 	rt.RegisterNotifyOps(notifier)
+	rt.RegisterFriendOps(conn, registry, notifier)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

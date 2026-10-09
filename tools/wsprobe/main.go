@@ -115,6 +115,48 @@ func main() {
 	}
 
 	switch scenario {
+	case "friends":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		// 1. Alice invites Bob: Alice sees invite_sent(1), Bob gets notified.
+		alice.send("1", "friend.add", map[string]string{"username": "Bob"})
+		_, ok := bob.waitFor("notification", 2*time.Second)
+		expect("bob notified of invite", ok, "")
+
+		alice.send("2", "friend.list", map[string]int{})
+		l1, _ := alice.waitFor("friend.list", 2*time.Second)
+		expect("alice sees invite_sent(1)", strings.Contains(fmt.Sprint(l1["data"]), "state\":1") || strings.Contains(fmt.Sprint(l1["data"]), "state:1"), fmt.Sprint(l1["data"]))
+
+		// 2. Bob adds Alice back: mutual friends(0).
+		bob.send("3", "friend.add", map[string]string{"username": "Alice"})
+		r, _ := bob.waitFor("friend.add", 2*time.Second)
+		expect("bob accept -> friend(0)", strings.Contains(fmt.Sprint(r["data"]), "state\":0") || strings.Contains(fmt.Sprint(r["data"]), "state:0"), fmt.Sprint(r["data"]))
+
+		// 3. Online presence in friend list.
+		alice.send("4", "friend.list", map[string]int{})
+		l2, _ := alice.waitFor("friend.list", 2*time.Second)
+		expect("alice sees bob friend(0)+online", strings.Contains(fmt.Sprint(l2["data"]), "online\":true") || strings.Contains(fmt.Sprint(l2["data"]), "online:true"), fmt.Sprint(l2["data"]))
+
+		// 4. Carol blocks Alice; Alice can no longer add Carol.
+		carol.send("5", "friend.block", map[string]string{"username": "Alice"})
+		carol.waitFor("friend.block", 2*time.Second)
+		alice.send("6", "friend.add", map[string]string{"username": "Carol"})
+		r2, _ := alice.waitFor("friend.add", 2*time.Second)
+		expect("alice blocked by carol", strings.Contains(fmt.Sprint(r2["data"]), "blocked"), fmt.Sprint(r2["data"]))
+
+		// 5. Remove relationship.
+		alice.send("7", "friend.remove", map[string]string{"username": "Bob"})
+		alice.waitFor("friend.remove", 2*time.Second)
+		alice.send("8", "friend.list", map[string]int{})
+		l3, _ := alice.waitFor("friend.list", 2*time.Second)
+		expect("bob removed from list", !strings.Contains(fmt.Sprint(l3["data"]), "Bob"), fmt.Sprint(l3["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
 	case "notify":
 		// Bob gets a PERSISTENT notification while offline.
 		bobID := userID("dev-bob")
