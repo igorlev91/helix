@@ -113,6 +113,8 @@ func expect(label string, ok bool, detail string) {
 	fmt.Printf("[%s] %s %s\n", status, label, detail)
 }
 
+func ok2(m map[string]any) bool { return m != nil && !strings.Contains(fmt.Sprint(m["data"]), "error") }
+
 func main() {
 	scenario := "match"
 	if len(os.Args) > 1 {
@@ -120,6 +122,106 @@ func main() {
 	}
 
 	switch scenario {
+	case "parties":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		// 1. Alice creates a party, Bob joins, both notified.
+		alice.send("1", "party.create", map[string]any{"open": true, "max_size": 2})
+		c, ok := alice.waitFor("party.create", 2*time.Second)
+		expect("party created", ok, fmt.Sprint(c["data"]))
+		pid, _ := c["data"].(map[string]any)["party_id"].(string)
+
+		bob.send("2", "party.join", map[string]string{"party_id": pid})
+		j, _ := bob.waitForMatch("party.join", 2*time.Second, "leader")
+		expect("bob joined", strings.Contains(fmt.Sprint(j["data"]), "Alice"), fmt.Sprint(j["data"]))
+		u, ok := alice.waitFor("party.update", 2*time.Second)
+		expect("alice sees join push", ok, fmt.Sprint(u["data"]))
+
+		// 3. Carol cannot join a full party.
+		carol.send("3", "party.join", map[string]string{"party_id": pid})
+		r, _ := carol.waitForMatch("party.join", 2*time.Second, "error")
+		expect("full party rejected", strings.Contains(fmt.Sprint(r["data"]), "full"), fmt.Sprint(r["data"]))
+
+		// 4. Leader leaves -> Bob becomes leader.
+		alice.send("4", "party.leave", map[string]bool{})
+		alice.waitFor("party.leave", 2*time.Second)
+		u2, ok := bob.waitForMatch("party.update", 2*time.Second, "new_leader")
+		expect("leader handover", ok && strings.Contains(fmt.Sprint(u2["data"]), "Bob"), fmt.Sprint(u2["data"]))
+
+		// 5. Carol now joins the half-empty party.
+		carol.send("5", "party.join", map[string]string{"party_id": pid})
+		_, ok = carol.waitForMatch("party.join", 2*time.Second, "leader")
+		expect("carol joins after slot freed", ok, "")
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
+	case "wallet":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		d := alice // wallet is per-user, one client is enough
+		_ = d
+
+		// Fresh balance.
+		alice.send("1", "wallet.get", map[string]bool{})
+		g, _ := alice.waitFor("wallet.get", 2*time.Second)
+		before := fmt.Sprint(g["data"])
+
+		// Credit +100.
+		alice.send("2", "wallet.change", map[string]any{"amount": 100, "reason": "daily"})
+		c1, _ := alice.waitForMatch("wallet.change", 2*time.Second, "coins")
+		expect("credit +100", ok2(c1), fmt.Sprint(c1["data"]))
+
+		// Debit -30.
+		alice.send("3", "wallet.change", map[string]any{"amount": -30, "reason": "shop"})
+		c2, _ := alice.waitForMatch("wallet.change", 2*time.Second, "coins")
+		expect("debit -30", ok2(c2), fmt.Sprint(c2["data"]))
+
+		// Overdraft rejected.
+		alice.send("4", "wallet.change", map[string]any{"amount": -999999, "reason": "greed"})
+		r, _ := alice.waitForMatch("wallet.change", 2*time.Second, "error")
+		expect("overdraft rejected", strings.Contains(fmt.Sprint(r["data"]), "insufficient"), fmt.Sprint(r["data"]))
+
+		// History has 2 entries.
+		alice.send("5", "wallet.history", map[string]int{"limit": 10})
+		h, _ := alice.waitFor("wallet.history", 2*time.Second)
+		expect("history entries", strings.Contains(fmt.Sprint(h["data"]), "daily") && strings.Contains(fmt.Sprint(h["data"]), "shop"), before+" -> "+fmt.Sprint(h["data"]))
+
+		alice.conn.Close()
+
+	case "tournament":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+
+		alice.send("1", "tournament.create", map[string]any{"id": "weekly_sprint", "sort_order": 1, "operator": 0, "duration_sec": 3600, "max_attempts": 2})
+		c, ok := alice.waitFor("tournament.create", 2*time.Second)
+		expect("tournament created", ok, fmt.Sprint(c["data"]))
+
+		// Attempts: Alice writes twice (best kept), third rejected.
+		alice.send("2", "tournament.write", map[string]any{"id": "weekly_sprint", "score": 50})
+		w1, _ := alice.waitForMatch("tournament.write", 2*time.Second, "score")
+		expect("attempt 1", ok2(w1), fmt.Sprint(w1["data"]))
+		alice.send("3", "tournament.write", map[string]any{"id": "weekly_sprint", "score": 70})
+		w2, _ := alice.waitForMatch("tournament.write", 2*time.Second, "score")
+		expect("attempt 2 (best=70)", strings.Contains(fmt.Sprint(w2["data"]), "score:70"), fmt.Sprint(w2["data"]))
+		alice.send("4", "tournament.write", map[string]any{"id": "weekly_sprint", "score": 80})
+		w3, _ := alice.waitForMatch("tournament.write", 2*time.Second, "error")
+		expect("attempt 3 rejected (limit)", strings.Contains(fmt.Sprint(w3["data"]), "no attempts left"), fmt.Sprint(w3["data"]))
+
+		// Bob joins and writes.
+		bob.send("5", "tournament.write", map[string]any{"id": "weekly_sprint", "score": 60})
+		bob.waitFor("tournament.write", 2*time.Second)
+
+		// Standings.
+		bob.send("6", "tournament.list", map[string]any{"id": "weekly_sprint", "limit": 5})
+		l, _ := bob.waitFor("tournament.list", 2*time.Second)
+		expect("standings Alice rank1", strings.Contains(fmt.Sprint(l["data"]), "rank:1") && strings.Contains(fmt.Sprint(l["data"]), "Alice"), fmt.Sprint(l["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+
 	case "hooks":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

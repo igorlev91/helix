@@ -17,6 +17,7 @@ import (
 	"helix/internal/match"
 	"helix/internal/matchmaker"
 	"helix/internal/notify"
+	"helix/internal/party"
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
@@ -92,6 +93,7 @@ func main() {
 	// 3. Components
 	registry := session.NewRegistry()
 	tr := tracker.New()
+	parties := party.NewRegistry()
 	notifier := notify.New(conn, registry)
 	hooks := registerGameHooks(notifier)
 	rt := router.New(hooks)
@@ -138,6 +140,9 @@ func main() {
 	rt.RegisterNotifyOps(notifier)
 	rt.RegisterFriendOps(conn, registry, notifier)
 	rt.RegisterGroupOps(conn)
+	rt.RegisterPartyOps(parties)
+	rt.RegisterWalletOps(conn)
+	rt.RegisterTournamentOps(conn)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
