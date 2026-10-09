@@ -49,7 +49,6 @@ func Parse(secret, tokenString string) (*TokenClaims, bool) {
 	return claims, true
 }
 
-
 type RefreshClaims struct {
 	UserID   string `json:"uid"`
 	Username string `json:"usn"`
@@ -72,7 +71,7 @@ func GenerateRefresh(secret string, userID uuid.UUID, username string, ttl time.
 	return token.SignedString([]byte(secret))
 }
 
-// ParseRefresh validates a refresh token 
+// ParseRefresh validates a refresh token
 func ParseRefresh(secret, tokenString string) (*RefreshClaims, bool) {
 	parsed, err := jwt.ParseWithClaims(tokenString, &RefreshClaims{},
 		func(t *jwt.Token) (any, error) { return []byte(secret), nil },

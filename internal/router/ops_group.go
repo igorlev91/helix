@@ -119,7 +119,7 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 		return map[string]any{"group_id": req.GroupID, "state": memberState}, nil
 	})
 
-	// group.accept — admin approves a join request 
+	// group.accept — admin approves a join request
 	r.Register("group.accept", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req struct {
 			GroupID  string `json:"group_id"`
