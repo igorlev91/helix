@@ -31,7 +31,7 @@ func NewRegistry() *Registry {
 	return &Registry{parties: map[string]*Party{}, byMember: map[uuid.UUID]string{}}
 }
 
-// Create makes a party with the caller as leader 
+// Create makes a party with the caller as leader
 func (r *Registry) Create(leader *session.Session, open bool, maxSize int) *Party {
 	if maxSize <= 0 {
 		maxSize = 4
@@ -99,7 +99,7 @@ func (r *Registry) RegisterMember(partyID string, sessionID uuid.UUID) {
 }
 
 // Leave removes a member; the leader leaving closes the party and the
-// next member (if any) becomes leader 
+// next member (if any) becomes leader
 func (r *Registry) Leave(p *Party, s *session.Session) (closed bool, newLeader *session.Session) {
 	p.mu.Lock()
 	delete(p.members, s.ID)

@@ -80,7 +80,7 @@ func (r *Router) RegisterTournamentOps(db *sql.DB) {
 			return nil, errors.New("tournament is not active")
 		}
 
-		// Attempt limit 
+		// Attempt limit
 		var attempts int
 		_ = db.QueryRowContext(ctx,
 			`SELECT num_attempts FROM tournament_records
@@ -126,7 +126,7 @@ func (r *Router) RegisterTournamentOps(db *sql.DB) {
 		return map[string]any{"tournament": req.ID, "score": score, "attempts_left": maxAttempts - attempts - 1}, nil
 	})
 
-	// tournament.list — standings with ranks 
+	// tournament.list — standings with ranks
 	r.Register("tournament.list", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req tournamentListRequest
 		if err := json.Unmarshal(data, &req); err != nil || req.ID == "" {

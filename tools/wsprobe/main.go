@@ -122,6 +122,45 @@ func main() {
 	}
 
 	switch scenario {
+	case "dm":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		// 1. Alice opens a DM with Bob; Bob gets pushed even though he never joined.
+		alice.send("1", "dm.open", map[string]string{"username": "Bob"})
+		o, ok := alice.waitForMatch("dm.open", 2*time.Second, "channel")
+		expect("dm channel opened", ok, fmt.Sprint(o["data"]))
+		channel, _ := o["data"].(map[string]any)["channel"].(string)
+		push, ok := bob.waitFor("dm.opened", 2*time.Second)
+		expect("bob pushed dm.opened", ok && strings.Contains(fmt.Sprint(push["data"]), "Alice"), fmt.Sprint(push["data"]))
+
+		// 2. Alice sends a DM; Bob receives it live.
+		alice.send("2", "chat.send", map[string]string{"channel": channel, "text": "hey bob"})
+		alice.waitForMatch("chat.message", 2*time.Second, "hey bob") // drain own echo
+		msg, ok := bob.waitFor("chat.message", 2*time.Second)
+		expect("bob receives dm", ok && strings.Contains(fmt.Sprint(msg["data"]), "hey bob"), fmt.Sprint(msg["data"]))
+
+		// 3. Carol (not a participant) cannot post to the DM.
+		carol.send("3", "chat.send", map[string]string{"channel": channel, "text": "intruder"})
+		r, _ := carol.waitForMatch("chat.send", 2*time.Second, "error")
+		expect("outsider blocked", strings.Contains(fmt.Sprint(r["data"]), "not in channel"), fmt.Sprint(r["data"]))
+
+		// 4. Bob replies through the same deterministic channel name.
+		bob.send("4", "chat.send", map[string]string{"channel": channel, "text": "hi alice"})
+		bob.waitForMatch("chat.message", 2*time.Second, "hi alice") // drain own echo
+		msg2, ok := alice.waitForMatch("chat.message", 2*time.Second, "hi alice")
+		expect("alice receives reply", ok, fmt.Sprint(msg2["data"]))
+
+		// 5. Conversation list shows the latest message.
+		alice.send("5", "dm.list", map[string]int{"limit": 5})
+		l, ok := alice.waitForMatch("dm.list", 2*time.Second, "hi alice")
+		expect("dm.list preview", ok, fmt.Sprint(l["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
 	case "parties":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

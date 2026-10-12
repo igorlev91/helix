@@ -143,6 +143,7 @@ func main() {
 	rt.RegisterPartyOps(parties)
 	rt.RegisterWalletOps(conn)
 	rt.RegisterTournamentOps(conn)
+	rt.RegisterDmOps(conn, registry, tr)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

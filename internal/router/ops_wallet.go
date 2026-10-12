@@ -47,7 +47,7 @@ func (r *Router) RegisterWalletOps(db *sql.DB) {
 	})
 
 	// wallet.change — apply a signed changeset. Debits that would take the
-	// balance below zero are rejected 
+	// balance below zero are rejected
 	r.Register("wallet.change", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req walletChangeRequest
 		if err := json.Unmarshal(data, &req); err != nil || req.Amount == 0 {
@@ -85,7 +85,7 @@ func (r *Router) RegisterWalletOps(db *sql.DB) {
 		return map[string]int64{"coins": b}, nil
 	})
 
-	// wallet.history — audit trail 
+	// wallet.history — audit trail
 	r.Register("wallet.history", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req walletHistoryRequest
 		_ = json.Unmarshal(data, &req)
