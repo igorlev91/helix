@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"helix/internal/session"
+	"helix/internal/tracker"
 )
 
 // Group (clan) ops
@@ -36,10 +37,29 @@ type groupIDRequest struct {
 }
 
 // RegisterGroupOps installs group.create / join / leave / members / list.
-func (r *Router) RegisterGroupOps(db *sql.DB) {
+// members are auto-joined and only members can post.
+func (r *Router) RegisterGroupOps(db *sql.DB, registry *session.Registry, tr *tracker.Tracker) {
 	ctx := context.Background()
 
-	// group.create — creator becomes superadmin (Nakama: CreateGroup).
+	// groupChannel is the deterministic chat channel of a group.
+	groupChannel := func(gid uuid.UUID) string { return "group:" + gid.String() }
+
+	// joinGroupChat subscribes ALL live sessions of a user to the group chat.
+	joinGroupChat := func(userID uuid.UUID, gid uuid.UUID) {
+		stream := "chat:" + groupChannel(gid)
+		for _, s := range registry.ByUser(userID) {
+			tr.Join(stream, s)
+		}
+	}
+	// leaveGroupChat removes the user's sessions from the group chat.
+	leaveGroupChat := func(userID uuid.UUID, gid uuid.UUID) {
+		stream := "chat:" + groupChannel(gid)
+		for _, s := range registry.ByUser(userID) {
+			tr.Leave(stream, s)
+		}
+	}
+
+	// group.create — creator becomes superadmin
 	r.Register("group.create", func(s *session.Session, data json.RawMessage) (any, error) {
 		var req groupCreateRequest
 		if err := json.Unmarshal(data, &req); err != nil || req.Name == "" {
@@ -74,7 +94,10 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		return map[string]any{"group_id": groupID.String(), "name": req.Name}, nil
+		// Creator is auto-joined to the group chat channel.
+		joinGroupChat(s.UserID, groupID)
+		return map[string]any{"group_id": groupID.String(), "name": req.Name,
+			"chat_channel": groupChannel(groupID)}, nil
 	})
 
 	// group.join — open group: member instantly; closed: join_request
@@ -115,8 +138,11 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 		if memberState == memberMember {
 			_, _ = db.ExecContext(ctx,
 				`UPDATE groups SET edge_count = edge_count + 1, update_time = now() WHERE id = $1`, gid)
+			// Open group: instantly joined, so instantly in the chat.
+			joinGroupChat(s.UserID, gid)
 		}
-		return map[string]any{"group_id": req.GroupID, "state": memberState}, nil
+		return map[string]any{"group_id": req.GroupID, "state": memberState,
+			"chat_channel": groupChannel(gid)}, nil
 	})
 
 	// group.accept — admin approves a join request
@@ -151,6 +177,12 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 		}
 		_, _ = db.ExecContext(ctx,
 			`UPDATE groups SET edge_count = edge_count + 1, update_time = now() WHERE id = $1`, gid)
+		// Accepted member joins the group chat (all their live sessions).
+		var targetID uuid.UUID
+		if err := db.QueryRowContext(ctx,
+			`SELECT id FROM users WHERE username = $1`, req.Username).Scan(&targetID); err == nil {
+			joinGroupChat(targetID, gid)
+		}
 		return map[string]any{"accepted": req.Username}, nil
 	})
 
@@ -175,6 +207,7 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 			if _, err := db.ExecContext(ctx, `DELETE FROM groups WHERE id = $1`, gid); err != nil {
 				return nil, err
 			}
+			leaveGroupChat(s.UserID, gid)
 			return map[string]any{"left": req.GroupID, "group_deleted": true}, nil
 		}
 		if _, err := db.ExecContext(ctx,
@@ -185,6 +218,7 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 			_, _ = db.ExecContext(ctx,
 				`UPDATE groups SET edge_count = edge_count - 1, update_time = now() WHERE id = $1`, gid)
 		}
+		leaveGroupChat(s.UserID, gid)
 		return map[string]any{"left": req.GroupID, "group_deleted": false}, nil
 	})
 
@@ -240,11 +274,12 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 		}
 		defer rows.Close()
 		type group struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			State    int    `json:"state"`
-			Members  int    `json:"members"`
-			MaxCount int    `json:"max_count"`
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			State       int    `json:"state"`
+			Members     int    `json:"members"`
+			MaxCount    int    `json:"max_count"`
+			ChatChannel string `json:"chat_channel"`
 		}
 		out := []group{}
 		for rows.Next() {
@@ -252,8 +287,30 @@ func (r *Router) RegisterGroupOps(db *sql.DB) {
 			if err := rows.Scan(&g.ID, &g.Name, &g.State, &g.Members, &g.MaxCount); err != nil {
 				return nil, err
 			}
+			g.ChatChannel = "group:" + g.ID
 			out = append(out, g)
 		}
 		return map[string]any{"groups": out}, nil
 	})
+}
+
+// AutoJoinGroupChats subscribes a fresh session to the chat channels of
+// every group the user is a member of (called on ws connect)
+func AutoJoinGroupChats(db *sql.DB, tr *tracker.Tracker, s *session.Session) {
+	rows, err := db.QueryContext(context.Background(),
+		`SELECT group_id FROM group_users WHERE user_id = $1 AND state <= 2`, s.UserID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var gids []uuid.UUID
+	for rows.Next() {
+		var gid uuid.UUID
+		if rows.Scan(&gid) == nil {
+			gids = append(gids, gid)
+		}
+	}
+	for _, gid := range gids {
+		tr.Join("chat:group:"+gid.String(), s)
+	}
 }

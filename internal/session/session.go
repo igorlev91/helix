@@ -21,6 +21,7 @@ type Session struct {
 	UserID   uuid.UUID // authenticated user (from the JWT, set at /ws upgrade)
 	Username string
 	MatchID  string // current authoritative match, empty when not in one
+	Status   string // presence status message
 	conn     *websocket.Conn
 
 	ctx       context.Context

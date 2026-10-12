@@ -21,6 +21,7 @@ import (
 	"helix/internal/router"
 	"helix/internal/server"
 	"helix/internal/session"
+	"helix/internal/status"
 	"helix/internal/tracker"
 )
 
@@ -95,6 +96,12 @@ func main() {
 	tr := tracker.New()
 	parties := party.NewRegistry()
 	notifier := notify.New(conn, registry)
+	sr := status.NewRegistry()
+	// Friends mutually follow each other's presence (rebuilt from the DB
+	// at startup;
+	if err := sr.LoadFriendsFollows(conn); err != nil {
+		log.Printf("status: could not load friend follows: %v", err)
+	}
 	hooks := registerGameHooks(notifier)
 	rt := router.New(hooks)
 	// Authoritative matches; when a race ends, the winner's leaderboard
@@ -138,18 +145,19 @@ func main() {
 	rt.RegisterMatchmakerOps(mm)
 	rt.RegisterMatchOps(matches)
 	rt.RegisterNotifyOps(notifier)
-	rt.RegisterFriendOps(conn, registry, notifier)
-	rt.RegisterGroupOps(conn)
+	rt.RegisterFriendOps(conn, registry, notifier, sr)
+	rt.RegisterGroupOps(conn, registry, tr)
 	rt.RegisterPartyOps(parties)
 	rt.RegisterWalletOps(conn)
 	rt.RegisterTournamentOps(conn)
 	rt.RegisterDmOps(conn, registry, tr)
+	rt.RegisterStatusOps(sr, registry)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(registry, rt, tr, mm, matches, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/ws", server.NewWsHandler(conn, registry, rt, tr, mm, matches, sr, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
 		conn, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second,

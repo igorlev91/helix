@@ -10,9 +10,10 @@ import (
 
 	"helix/internal/notify"
 	"helix/internal/session"
+	"helix/internal/status"
 )
 
-// Friend ops, simplified analog of core_friend.go in Nakama.
+// Friend ops
 //
 //	0 = friend (mutual), 1 = invite_sent, 2 = invite_received, 3 = blocked
 const (
@@ -32,7 +33,8 @@ type friendListRequest struct {
 }
 
 // RegisterFriendOps installs friend.add / friend.remove / friend.block / friend.list.
-func (r *Router) RegisterFriendOps(db *sql.DB, registry *session.Registry, n *notify.Notifier) {
+// Friends mutually follow each other's status presence.
+func (r *Router) RegisterFriendOps(db *sql.DB, registry *session.Registry, n *notify.Notifier, sr *status.Registry) {
 	ctx := context.Background()
 
 	findUser := func(username string) (uuid.UUID, error) {
@@ -83,6 +85,9 @@ func (r *Router) RegisterFriendOps(db *sql.DB, registry *session.Registry, n *no
 				if err != nil {
 					return nil, err
 				}
+				// Mutual follow: both now see each other's presence.
+				sr.Follow(s.UserID, target)
+				sr.Follow(target, s.UserID)
 				_ = n.Send(ctx, target, "Friend request accepted", 20,
 					map[string]string{"username": s.Username}, true, &s.UserID)
 				return map[string]any{"state": stateFriend, "username": req.Username}, nil
@@ -130,6 +135,9 @@ func (r *Router) RegisterFriendOps(db *sql.DB, registry *session.Registry, n *no
 		if err != nil {
 			return nil, err
 		}
+		// Unfollow in both directions (no more presence visibility).
+		sr.Unfollow(s.UserID, target)
+		sr.Unfollow(target, s.UserID)
 		return map[string]any{"removed": req.Username}, nil
 	})
 

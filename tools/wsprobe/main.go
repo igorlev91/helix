@@ -122,6 +122,85 @@ func main() {
 	}
 
 	switch scenario {
+	case "groupchat":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		// 1. Alice creates an open group; chat channel comes back with it.
+		alice.send("1", "group.create", map[string]any{"name": "helix-clan", "open": true})
+		c, ok := alice.waitForMatch("group.create", 2*time.Second, "chat_channel")
+		expect("group chat channel returned", ok, fmt.Sprint(c["data"]))
+		channel, _ := c["data"].(map[string]any)["chat_channel"].(string)
+
+		// 2. Bob joins the open group -> auto-joined to the chat.
+		bob.send("2", "group.join", map[string]string{"group_id": strings.TrimPrefix(channel, "group:")})
+		j, _ := bob.waitForMatch("group.join", 2*time.Second, "state")
+		expect("bob joined open group", ok && j != nil, fmt.Sprint(j["data"]))
+
+		// 3. Alice posts to the group channel; Bob receives live.
+		alice.send("3", "chat.send", map[string]string{"channel": channel, "text": "welcome to the clan"})
+		alice.waitForMatch("chat.message", 2*time.Second, "welcome") // own echo
+		msg, ok := bob.waitForMatch("chat.message", 2*time.Second, "welcome to the clan")
+		expect("member receives group chat", ok, fmt.Sprint(msg["data"]))
+
+		// 4. Carol (not a member) is blocked by the stream ACL.
+		carol.send("4", "chat.send", map[string]string{"channel": channel, "text": "intruder"})
+		r, _ := carol.waitForMatch("chat.send", 2*time.Second, "error")
+		expect("non-member blocked", strings.Contains(fmt.Sprint(r["data"]), "not in channel"), fmt.Sprint(r["data"]))
+
+		// 5. Bob reconnects; auto-join puts him back into the group chat.
+		bob.conn.Close()
+		time.Sleep(300 * time.Millisecond)
+		bob2 := dial("Bob", auth("dev-bob", "Bob"))
+		alice.send("5", "chat.send", map[string]string{"channel": channel, "text": "still here?"})
+		msg2, ok := bob2.waitForMatch("chat.message", 2*time.Second, "still here")
+		expect("auto-join after reconnect", ok, fmt.Sprint(msg2["data"]))
+
+		// 6. Bob leaves; no longer receives the channel.
+		bob2.send("6", "group.leave", map[string]string{"group_id": strings.TrimPrefix(channel, "group:")})
+		bob2.waitFor("group.leave", 2*time.Second)
+		alice.send("7", "chat.send", map[string]string{"channel": channel, "text": "anyone?"})
+		alice.waitForMatch("chat.message", 2*time.Second, "anyone") // own echo
+		_, ok = bob2.waitForMatch("chat.message", 1*time.Second, "anyone")
+		expect("ex-member does not receive", !ok, "should time out")
+
+		alice.conn.Close()
+		bob2.conn.Close()
+		carol.conn.Close()
+
+	case "status":
+		// Alice and Bob are friends from earlier scenarios; ensure the edge exists.
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		alice.send("0", "friend.add", map[string]string{"username": "Bob"})
+		alice.waitFor("friend.add", 2*time.Second)
+		bob.send("0", "friend.add", map[string]string{"username": "Alice"})
+		bob.waitFor("friend.add", 2*time.Second)
+
+		// 1. Alice sets a status; Bob (follower) gets a push.
+		alice.send("1", "status.set", map[string]string{"message": "racing"})
+		u, ok := bob.waitForMatch("status.update", 2*time.Second, "racing")
+		expect("follower sees status push", ok, fmt.Sprint(u["data"]))
+
+		// 2. Bob reads followed statuses via status.get.
+		bob.send("2", "status.get", map[string]bool{})
+		g, _ := bob.waitForMatch("status.get", 2*time.Second, "racing")
+		expect("status.get shows Alice online+racing", strings.Contains(fmt.Sprint(g["data"]), "online:true"), fmt.Sprint(g["data"]))
+
+		// 3. Alice disconnects; Bob gets online:false.
+		alice.conn.Close()
+		u2, ok := bob.waitForMatch("status.update", 2*time.Second, "online:false")
+		expect("offline push on disconnect", ok, fmt.Sprint(u2["data"]))
+
+		// 4. Alice reconnects; Bob gets online:true again.
+		alice2 := dial("Alice", auth("dev-alice", "Alice"))
+		u3, ok := bob.waitForMatch("status.update", 2*time.Second, "online:true")
+		expect("online push on reconnect", ok, fmt.Sprint(u3["data"]))
+
+		alice2.conn.Close()
+		bob.conn.Close()
+
 	case "dm":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

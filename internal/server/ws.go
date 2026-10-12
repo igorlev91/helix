@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -14,12 +15,13 @@ import (
 	"helix/internal/matchmaker"
 	"helix/internal/router"
 	"helix/internal/session"
+	"helix/internal/status"
 	"helix/internal/tracker"
 )
 
 // NewWsHandler returns an HTTP handler that upgrades connections to WebSocket.
 // validate token -> upgrade -> create session -> register -> Consume.
-func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, matches *match.Registry, secret string) http.HandlerFunc {
+func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, matches *match.Registry, sr *status.Registry, secret string) http.HandlerFunc {
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -66,12 +68,23 @@ func NewWsHandler(registry *session.Registry, rt *router.Router, tr *tracker.Tra
 						m.RemovePresence(s.ID)
 					}
 				}
+				// Presence: notify followers when the LAST session of the
+				// user goes offline 
+				if sr.Offline(s.UserID) {
+					router.PushPresence(sr, registry, s, false)
+				}
 				log.Printf("ws session removed, online=%d", registry.Count())
 			},
 		)
 
 		// Register the online session
 		registry.Add(s)
+		// Group chat: auto-join chat channels of every group the user is in.
+		router.AutoJoinGroupChats(db, tr, s)
+		// Presence: notify followers when the FIRST session comes online.
+		if sr.Online(userID) {
+			router.PushPresence(sr, registry, s, true)
+		}
 		log.Printf("ws session registered %s user=%s, online=%d", s.ID, s.Username, registry.Count())
 
 		// Block until the session closes (Nakama: session.Consume()).
