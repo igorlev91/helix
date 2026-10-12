@@ -10,23 +10,27 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"helix/internal/tracker"
 )
 
-// Node is one helix instance in a cluster.
+// Node is one helix instance in a cluster. Membership is gossip-based
+// (gossip.go): nodes join via seeds and learn the rest transitively.
 type Node struct {
-	peers  []string // host:port client endpoints of OTHER nodes
-	client *http.Client
-	tr     *tracker.Tracker
+	mu      sync.RWMutex
+	self    Member
+	members map[string]*Member
+	seeds   []string // join seeds, retried while no alive peers
+	client  *http.Client
+	tr      *tracker.Tracker
 }
 
-func New(peers []string, tr *tracker.Tracker) *Node {
+func New(tr *tracker.Tracker) *Node {
 	return &Node{
-		peers:  peers,
-		tr:     tr,
 		client: &http.Client{Timeout: 2 * time.Second},
+		tr:     tr,
 	}
 }
 
@@ -37,11 +41,12 @@ type StreamMessage struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-// Fanout sends a stream message to every peer node. Delivery on the local
+// Fanout sends a stream message to every alive member. Delivery on the local
 // node is done by the caller; errors are logged but never fatal — a dead
-// peer must not break local gameplay 
+// peer must not break local gameplay
 func (n *Node) Fanout(stream, op string, data any) {
-	if len(n.peers) == 0 {
+	peers := n.AliveAddrs()
+	if len(peers) == 0 {
 		return
 	}
 	payload, err := json.Marshal(data)
@@ -52,7 +57,7 @@ func (n *Node) Fanout(stream, op string, data any) {
 	if err != nil {
 		return
 	}
-	for _, peer := range n.peers {
+	for _, peer := range peers {
 		go func(addr string) {
 			resp, err := n.client.Post("http://"+addr+"/cluster/send", "application/json", bytes.NewReader(body))
 			if err != nil {
@@ -88,5 +93,5 @@ func (n *Node) ReceiveHandler() http.HandlerFunc {
 	}
 }
 
-// Peers returns the configured peer list (for the /health endpoint).
-func (n *Node) Peers() []string { return n.peers }
+// Peers returns addresses of alive members (for the /health endpoint).
+func (n *Node) Peers() []string { return n.AliveAddrs() }

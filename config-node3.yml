@@ -1,0 +1,13 @@
+name: helix-node3
+datadir: data
+database: postgres:localdb@localhost:5432/helix
+port: 7354
+ops_port: 7355
+verbose: true
+session:
+  encryption_key: defaultencryptionkey
+  refresh_encryption_key: defaultrefreshencryptionkey
+  token_expiry_sec: 3600
+cluster:
+  enabled: true
+  peers: ["localhost:7352"]  # seed only; node1 is discovered transitively

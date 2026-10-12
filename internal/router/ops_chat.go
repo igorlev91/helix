@@ -29,7 +29,7 @@ type chatHistoryRequest struct {
 // RegisterChatOps installs chat.join / chat.leave / chat.send / chat.history.
 // db may be nil (in-memory only, no persistence). node may be nil (single-node).
 // When a cluster node is set, chat messages fan out to all peers so sessions
-// connected to OTHER nodes receive them too 
+// connected to OTHER nodes receive them too
 func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB, node *cluster.Node) {
 	streamName := func(channel string) string { return "chat:" + channel }
 

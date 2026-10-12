@@ -141,10 +141,12 @@ func main() {
 	mm := matchmaker.New(router.NewMatchCallback(tr, matches))
 
 	// Cluster fan-out: nil when disabled (single-node, default).
+	// Membership is gossip-based: join via seeds, learn the rest transitively.
 	var node *cluster.Node
 	if cfg.Cluster.Enabled {
-		node = cluster.New(cfg.Cluster.Peers, tr)
-		log.Printf("cluster enabled, peers=%v", cfg.Cluster.Peers)
+		node = cluster.New(tr)
+		node.StartMembership(cfg.Name, fmt.Sprintf("localhost:%d", cfg.Port), cfg.Cluster.Peers)
+		log.Printf("cluster enabled, seeds=%v", cfg.Cluster.Peers)
 	}
 
 	rt.RegisterBuiltinOps(registry)
@@ -177,6 +179,9 @@ func main() {
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 	if node != nil {
 		mux.HandleFunc("/cluster/send", node.ReceiveHandler())
+		mux.HandleFunc("/cluster/gossip", node.GossipHandler())
+		mux.HandleFunc("/cluster/leave", node.LeaveHandler())
+		mux.HandleFunc("/cluster/members", node.MembersHandler())
 	}
 
 	// 4. HTTP server on the client port
@@ -195,6 +200,9 @@ func main() {
 	<-stop
 
 	log.Printf("Shutting down")
+	if node != nil {
+		node.Leave() // announce departure so peers drop us immediately
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

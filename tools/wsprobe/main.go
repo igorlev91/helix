@@ -128,6 +128,67 @@ func main() {
 	}
 
 	switch scenario {
+	case "gossip":
+		// node1 (7350): seed-less. node2 (7352): seed=7350. node3 (7354): seed=7352.
+		// node3 must discover node1 transitively through gossip.
+
+		// 1. Wait until node1's member table knows node3 (transitive discovery).
+		var membersOK bool
+		for i := 0; i < 10; i++ {
+			resp, err := http.Get("http://localhost:7350/cluster/members")
+			if err == nil {
+				raw, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if strings.Contains(string(raw), "helix-node3") {
+					membersOK = true
+					break
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		expect("transitive discovery (node1 knows node3)", membersOK, "")
+
+		// 2. Chat between node1 and node3 — they were NEVER in each other's config.
+		alice := dialAt(7350, "Alice", authAt(7350, "dev-alice", "Alice"))
+		carol := dialAt(7354, "Carol", authAt(7354, "dev-carol", "Carol"))
+		alice.send("1", "chat.join", map[string]string{"channel": "gossip-lobby"})
+		alice.waitFor("chat.join", 2*time.Second)
+		carol.send("1", "chat.join", map[string]string{"channel": "gossip-lobby"})
+		carol.waitFor("chat.join", 2*time.Second)
+		alice.send("2", "chat.send", map[string]string{"channel": "gossip-lobby", "text": "hello via gossip"})
+		msg, ok := carol.waitForMatch("chat.message", 3*time.Second, "hello via gossip")
+		expect("gossip-discovered peer delivers chat", ok, fmt.Sprint(msg["data"]))
+
+		// 3. Graceful leave: node3 announces departure; node1 drops it.
+		resp, err := http.Post("http://localhost:7354/cluster/leave", "", nil)
+		if err == nil {
+			resp.Body.Close()
+		}
+		var leftOK bool
+		for i := 0; i < 10; i++ {
+			r2, err := http.Get("http://localhost:7350/cluster/members")
+			if err == nil {
+				raw, _ := io.ReadAll(r2.Body)
+				r2.Body.Close()
+				var ms []map[string]any
+				_ = json.Unmarshal(raw, &ms)
+				leftOK = true
+				for _, m := range ms {
+					if m["name"] == "helix-node3" && m["state"] != "dead" {
+						leftOK = false
+					}
+				}
+				if leftOK {
+					break
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		expect("graceful leave propagates", leftOK, "")
+
+		alice.conn.Close()
+		carol.conn.Close()
+
 	case "cluster":
 		// Node1 on 7350, node2 on 7352 — shared DB, fan-out via /cluster/send.
 		alice := dialAt(7350, "Alice", authAt(7350, "dev-alice", "Alice"))
