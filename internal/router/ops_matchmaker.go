@@ -11,12 +11,17 @@ import (
 )
 
 // Matchmaker ops
-// When a match forms, members join the "chat:match-<id>" stream and get a
-// match.found push; the match channel then works with regular chat ops.
+// Entries carry properties + a query (Bleve subset); matching is
+// mutual and min/max counts include the searching user. When a match forms,
+// members join the "chat:match-<id>" stream and get a match.found push with
+// the matched users' properties
 
 type mmAddRequest struct {
-	Min int `json:"min"` // players needed to start
-	Max int `json:"max"` // max group size (Nakama: max_count)
+	Min          int                `json:"min"` // players incl. self, >= 2
+	Max          int                `json:"max"` // max group size (Nakama: max_count)
+	Query        string             `json:"query"`
+	StringProps  map[string]string  `json:"string_properties"`
+	NumericProps map[string]float64 `json:"numeric_properties"`
 }
 
 // RegisterMatchmakerOps installs matchmaker.add / matchmaker.remove.
@@ -32,28 +37,52 @@ func (r *Router) RegisterMatchmakerOps(mm *matchmaker.Matchmaker) {
 		if req.Max < req.Min {
 			req.Max = req.Min
 		}
-		mm.Add(&matchmaker.Ticket{Session: s, Min: req.Min, Max: req.Max})
-		return map[string]any{"queued": true, "min": req.Min, "max": req.Max}, nil
+		if req.Query == "" {
+			req.Query = "*"
+		}
+		t := mm.Add(&matchmaker.Ticket{
+			Session:      s,
+			Min:          req.Min,
+			Max:          req.Max,
+			Query:        req.Query,
+			StringProps:  req.StringProps,
+			NumericProps: req.NumericProps,
+		})
+		// Nakama returns the ticket; the client needs it for cancellation.
+		return map[string]any{"ticket": t.ID, "min": req.Min, "max": req.Max}, nil
 	})
 
+	// matchmaker.remove {ticket}: cancel one entry; empty ticket = all mine.
 	r.Register("matchmaker.remove", func(s *session.Session, data json.RawMessage) (any, error) {
-		mm.Remove(s.ID)
-		return map[string]bool{"removed": true}, nil
+		var req struct {
+			Ticket string `json:"ticket"`
+		}
+		_ = json.Unmarshal(data, &req)
+		if req.Ticket == "" {
+			mm.Remove(s.ID)
+			return map[string]bool{"removed": true}, nil
+		}
+		return map[string]bool{"removed": mm.RemoveTicket(req.Ticket)}, nil
 	})
 }
 
 // NewMatchCallback builds the onMatch callback for the matchmaker:
 // creates an authoritative race match, joins members into its chat stream
-// and pushes match.found (Nakama: matchRegistry.Create + tracker.Track +
-// router matchmaker.matched).
+// and pushes match.found
 func NewMatchCallback(tr *tracker.Tracker, matches *match.Registry) func(tickets []*matchmaker.Ticket, matchID string) {
 	return func(tickets []*matchmaker.Ticket, matchID string) {
 		channel := "match-" + matchID
-		usernames := make([]string, 0, len(tickets))
+		// Matched users see each other's properties (Nakama: MatchmakerMatched).
+		type matchedUser struct {
+			Username     string             `json:"username"`
+			StringProps  map[string]string  `json:"string_properties,omitempty"`
+			NumericProps map[string]float64 `json:"numeric_properties,omitempty"`
+		}
+		users := make([]matchedUser, 0, len(tickets))
 		players := make([]*session.Session, 0, len(tickets))
 		for _, t := range tickets {
 			tr.Join("chat:"+channel, t.Session)
-			usernames = append(usernames, t.Session.Username)
+			users = append(users, matchedUser{t.Session.Username, t.StringProps, t.NumericProps})
 			players = append(players, t.Session)
 		}
 
@@ -64,7 +93,8 @@ func NewMatchCallback(tr *tracker.Tracker, matches *match.Registry) func(tickets
 			payload, err := json.Marshal(Envelope{Op: "match.found", Data: mustJSON(map[string]any{
 				"match_id": matchID,
 				"channel":  channel,
-				"players":  usernames,
+				"ticket":   t.ID, // which of my tickets matched
+				"users":    users,
 			})})
 			if err != nil {
 				continue

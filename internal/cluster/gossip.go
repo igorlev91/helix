@@ -193,7 +193,7 @@ func (n *Node) AliveAddrs() []string {
 }
 
 // Join contacts seed nodes until one answers; the rest of the cluster is
-// learned transitively from its digest 
+// learned transitively from its digest
 func (n *Node) Join(seeds []string) {
 	body, _ := json.Marshal(n.digest())
 	for _, seed := range seeds {
@@ -216,7 +216,7 @@ func (n *Node) Join(seeds []string) {
 }
 
 // Leave announces graceful departure: incarnation bump + dead state,
-// pushed to every known member 
+// pushed to every known member
 func (n *Node) Leave() {
 	n.mu.Lock()
 	n.self.Incarnation++

@@ -128,6 +128,59 @@ func main() {
 	}
 
 	switch scenario {
+	case "mmq":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		// 1. Mutual query match: Alice requires region=europe; Bob requires rank>=5.
+		alice.send("1", "matchmaker.add", map[string]any{
+			"min": 2, "max": 2, "query": "+properties.region:europe",
+			"string_properties":  map[string]string{"region": "europe"},
+			"numeric_properties": map[string]float64{"rank": 8},
+		})
+		a, _ := alice.waitFor("matchmaker.add", 2*time.Second)
+		aTicket, _ := a["data"].(map[string]any)["ticket"].(string)
+		expect("ticket returned", aTicket != "", fmt.Sprint(a["data"]))
+		bob.send("1", "matchmaker.add", map[string]any{
+			"min": 2, "max": 2, "query": "+properties.rank:>=5",
+			"string_properties":  map[string]string{"region": "europe"},
+			"numeric_properties": map[string]float64{"rank": 6},
+		})
+		m1, ok := alice.waitForMatch("match.found", 3*time.Second, "Bob")
+		expect("mutual query match alice+bob", ok, fmt.Sprint(m1["data"]))
+		m2, ok := bob.waitForMatch("match.found", 3*time.Second, "rank:8")
+		expect("matched users see properties", ok, fmt.Sprint(m2["data"]))
+
+		// 2. Query rejects: Carol requires region=asia; Alice's properties say europe.
+		carol.send("1", "matchmaker.add", map[string]any{
+			"min": 2, "max": 2, "query": "+properties.region:asia",
+			"string_properties": map[string]string{"region": "asia"},
+		})
+		carol.waitFor("matchmaker.add", 2*time.Second)
+		alice.send("2", "matchmaker.add", map[string]any{
+			"min": 2, "max": 2, "query": "*",
+			"string_properties": map[string]string{"region": "europe"},
+		})
+		alice.waitFor("matchmaker.add", 2*time.Second)
+		_, ok = carol.waitFor("match.found", 1500*time.Millisecond)
+		expect("region=asia rejects europe player", !ok, "carol should stay queued")
+
+		// 3. Cancel by ticket: Carol cancels, then re-adds without query -> matches Alice.
+		carol.send("2", "matchmaker.remove", map[string]string{})
+		r, _ := carol.waitFor("matchmaker.remove", 2*time.Second)
+		expect("cancel all my tickets", strings.Contains(fmt.Sprint(r["data"]), "removed:true"), fmt.Sprint(r["data"]))
+		carol.send("3", "matchmaker.add", map[string]any{
+			"min": 2, "max": 2, "query": "*",
+			"string_properties": map[string]string{"region": "asia"},
+		})
+		m3, ok := carol.waitForMatch("match.found", 3*time.Second, "Alice")
+		expect("wildcard matches after requeue", ok, fmt.Sprint(m3["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
 	case "gossip":
 		// node1 (7350): seed-less. node2 (7352): seed=7350. node3 (7354): seed=7352.
 		// node3 must discover node1 transitively through gossip.
