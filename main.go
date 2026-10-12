@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"helix/internal/cluster"
 	"helix/internal/config"
 	"helix/internal/db"
 	"helix/internal/match"
@@ -138,8 +139,16 @@ func main() {
 		}
 	})
 	mm := matchmaker.New(router.NewMatchCallback(tr, matches))
+
+	// Cluster fan-out: nil when disabled (single-node, default).
+	var node *cluster.Node
+	if cfg.Cluster.Enabled {
+		node = cluster.New(cfg.Cluster.Peers, tr)
+		log.Printf("cluster enabled, peers=%v", cfg.Cluster.Peers)
+	}
+
 	rt.RegisterBuiltinOps(registry)
-	rt.RegisterChatOps(tr, conn)
+	rt.RegisterChatOps(tr, conn, node)
 	rt.RegisterStorageOps(conn)
 	rt.RegisterLeaderboardOps(conn)
 	rt.RegisterMatchmakerOps(mm)
@@ -166,6 +175,9 @@ func main() {
 		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
+	if node != nil {
+		mux.HandleFunc("/cluster/send", node.ReceiveHandler())
+	}
 
 	// 4. HTTP server on the client port
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: mux}

@@ -27,7 +27,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Follow makes follower observe target's presence 
+// Follow makes follower observe target's presence
 func (r *Registry) Follow(follower, target uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

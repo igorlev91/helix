@@ -1,0 +1,13 @@
+name: helix-node2
+datadir: data
+database: postgres:localdb@localhost:5432/helix
+port: 7352
+ops_port: 7353
+verbose: true
+session:
+  encryption_key: defaultencryptionkey  # must match node1 to share tokens
+  refresh_encryption_key: defaultrefreshencryptionkey
+  token_expiry_sec: 3600
+cluster:
+  enabled: true
+  peers: ["localhost:7350"]

@@ -6,4 +6,8 @@ ops_port: 7351
 verbose: true
 session:
   encryption_key: defaultencryptionkey  # change in production
+  refresh_encryption_key: defaultrefreshencryptionkey
   token_expiry_sec: 3600
+cluster:
+  enabled: true
+  peers: ["localhost:7352"]

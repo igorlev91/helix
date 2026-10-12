@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"helix/internal/cluster"
 	"helix/internal/session"
 	"helix/internal/tracker"
 )
@@ -26,8 +27,10 @@ type chatHistoryRequest struct {
 }
 
 // RegisterChatOps installs chat.join / chat.leave / chat.send / chat.history.
-// db may be nil (in-memory only, no persistence).
-func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
+// db may be nil (in-memory only, no persistence). node may be nil (single-node).
+// When a cluster node is set, chat messages fan out to all peers so sessions
+// connected to OTHER nodes receive them too 
+func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB, node *cluster.Node) {
 	streamName := func(channel string) string { return "chat:" + channel }
 
 	r.Register("chat.join", func(s *session.Session, data json.RawMessage) (any, error) {
@@ -82,6 +85,14 @@ func (r *Router) RegisterChatOps(tr *tracker.Tracker, db *sql.DB) {
 					"username": s.Username,
 					"text":     req.Text,
 				})
+				// Cluster: peers deliver to THEIR local sessions of the stream.
+				if node != nil {
+					node.Fanout(stream, "chat.message", map[string]any{
+						"channel":  req.Channel,
+						"username": s.Username,
+						"text":     req.Text,
+					})
+				}
 				return map[string]string{"sent": req.Channel}, nil
 			}
 		}

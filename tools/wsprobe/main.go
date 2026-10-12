@@ -20,9 +20,9 @@ type client struct {
 	in   chan map[string]any
 }
 
-func auth(deviceID, username string) string {
+func authAt(port int, deviceID, username string) string {
 	body := fmt.Sprintf(`{"device_id":%q,"username":%q}`, deviceID, username)
-	resp, err := http.Post("http://localhost:7350/auth/device", "application/json", strings.NewReader(body))
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/auth/device", port), "application/json", strings.NewReader(body))
 	if err != nil {
 		panic(err)
 	}
@@ -35,6 +35,10 @@ func auth(deviceID, username string) string {
 		panic("auth failed: " + string(raw))
 	}
 	return out.Token
+}
+
+func auth(deviceID, username string) string {
+	return authAt(7350, deviceID, username)
 }
 
 func userID(deviceID string) string {
@@ -52,8 +56,8 @@ func userID(deviceID string) string {
 	return out.UserID
 }
 
-func dial(name, token string) *client {
-	c, _, err := websocket.DefaultDialer.Dial("ws://localhost:7350/ws?token="+token, nil)
+func dialAt(port int, name, token string) *client {
+	c, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://localhost:%d/ws?token=", port)+token, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -73,6 +77,8 @@ func dial(name, token string) *client {
 	}()
 	return cl
 }
+
+func dial(name, token string) *client { return dialAt(7350, name, token) }
 
 func (c *client) send(cid, op string, data any) {
 	raw, _ := json.Marshal(data)
@@ -122,6 +128,35 @@ func main() {
 	}
 
 	switch scenario {
+	case "cluster":
+		// Node1 on 7350, node2 on 7352 — shared DB, fan-out via /cluster/send.
+		alice := dialAt(7350, "Alice", authAt(7350, "dev-alice", "Alice"))
+		bob := dialAt(7352, "Bob", authAt(7352, "dev-bob", "Bob"))
+
+		// Both join the same lobby channel on DIFFERENT nodes.
+		alice.send("1", "chat.join", map[string]string{"channel": "lobby"})
+		alice.waitFor("chat.join", 2*time.Second)
+		bob.send("1", "chat.join", map[string]string{"channel": "lobby"})
+		bob.waitFor("chat.join", 2*time.Second)
+
+		// Alice sends from node1 -> Bob on node2 must receive via fan-out.
+		alice.send("2", "chat.send", map[string]string{"channel": "lobby", "text": "cross-node hello"})
+		msg, ok := bob.waitForMatch("chat.message", 3*time.Second, "cross-node hello")
+		expect("cross-node delivery", ok, fmt.Sprint(msg["data"]))
+
+		// Bob replies from node2 -> Alice on node1 receives via fan-out.
+		bob.send("3", "chat.send", map[string]string{"channel": "lobby", "text": "hi from node2"})
+		msg2, ok := alice.waitForMatch("chat.message", 3*time.Second, "hi from node2")
+		expect("reverse fan-out", ok, fmt.Sprint(msg2["data"]))
+
+		// History is shared (single DB): message written on node1 is visible on node2.
+		bob.send("4", "chat.history", map[string]any{"channel": "lobby", "limit": 5})
+		h, ok := bob.waitForMatch("chat.history", 2*time.Second, "cross-node hello")
+		expect("shared history", ok, fmt.Sprint(h["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+
 	case "groupchat":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

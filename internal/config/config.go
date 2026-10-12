@@ -18,6 +18,13 @@ type Config struct {
 	OpsPort  int           `yaml:"ops_port"`
 	Verbose  bool          `yaml:"verbose"`
 	Session  SessionConfig `yaml:"session"` // auth/token settings
+	Cluster  ClusterConfig `yaml:"cluster"` // multi-node fan-out
+}
+
+// ClusterConfig mirrors cluster.* — static peer list
+type ClusterConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Peers   []string `yaml:"peers"` // e.g. ["localhost:7450"] — client ports of other nodes
 }
 
 // SessionConfig mirrors session.*

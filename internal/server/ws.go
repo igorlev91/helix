@@ -69,7 +69,7 @@ func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr 
 					}
 				}
 				// Presence: notify followers when the LAST session of the
-				// user goes offline 
+				// user goes offline
 				if sr.Offline(s.UserID) {
 					router.PushPresence(sr, registry, s, false)
 				}
