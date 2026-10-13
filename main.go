@@ -138,7 +138,7 @@ func main() {
 			}
 		}
 	})
-	mm := matchmaker.New(router.NewMatchCallback(tr, matches))
+	mm := matchmaker.New(router.NewMatchCallback(tr, matches, cfg.Session.EncryptionKey))
 
 	// Cluster fan-out: nil when disabled (single-node, default).
 	// Membership is gossip-based: join via seeds, learn the rest transitively.
@@ -154,7 +154,7 @@ func main() {
 	rt.RegisterStorageOps(conn)
 	rt.RegisterLeaderboardOps(conn)
 	rt.RegisterMatchmakerOps(mm)
-	rt.RegisterMatchOps(matches)
+	rt.RegisterMatchOps(matches, tr, cfg.Session.EncryptionKey)
 	rt.RegisterNotifyOps(notifier)
 	rt.RegisterFriendOps(conn, registry, notifier, sr)
 	rt.RegisterGroupOps(conn, registry, tr)

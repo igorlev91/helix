@@ -3,7 +3,11 @@ package router
 import (
 	"encoding/json"
 	"errors"
+	"time"
 
+	"github.com/google/uuid"
+
+	"helix/internal/auth"
 	"helix/internal/match"
 	"helix/internal/matchmaker"
 	"helix/internal/session"
@@ -67,9 +71,10 @@ func (r *Router) RegisterMatchmakerOps(mm *matchmaker.Matchmaker) {
 }
 
 // NewMatchCallback builds the onMatch callback for the matchmaker:
-// creates an authoritative race match, joins members into its chat stream
-// and pushes match.found
-func NewMatchCallback(tr *tracker.Tracker, matches *match.Registry) func(tickets []*matchmaker.Ticket, matchID string) {
+// reserves a pending match and issues a SHORT-LIVED match token per user
+// (Nakama: MatchmakerMatched.token — a JWT authorizing match join; the
+// match starts when clients join with their tokens).
+func NewMatchCallback(tr *tracker.Tracker, matches *match.Registry, secret string) func(tickets []*matchmaker.Ticket, matchID string) {
 	return func(tickets []*matchmaker.Ticket, matchID string) {
 		channel := "match-" + matchID
 		// Matched users see each other's properties (Nakama: MatchmakerMatched).
@@ -79,21 +84,25 @@ func NewMatchCallback(tr *tracker.Tracker, matches *match.Registry) func(tickets
 			NumericProps map[string]float64 `json:"numeric_properties,omitempty"`
 		}
 		users := make([]matchedUser, 0, len(tickets))
-		players := make([]*session.Session, 0, len(tickets))
+		allowed := make([]uuid.UUID, 0, len(tickets))
 		for _, t := range tickets {
-			tr.Join("chat:"+channel, t.Session)
 			users = append(users, matchedUser{t.Session.Username, t.StringProps, t.NumericProps})
-			players = append(players, t.Session)
+			allowed = append(allowed, t.Session.UserID)
 		}
 
-		// Authoritative match with a 5 Hz server tick.
-		matches.Create(matchID, 5, match.NewRaceHandler(), players)
+		// Reserve the match; it starts on the first token join.
+		matches.RegisterPending(matchID, 5, func() match.Handler { return match.NewRaceHandler() }, allowed)
 
 		for _, t := range tickets {
+			token, err := auth.GenerateMatchToken(secret, t.Session.UserID, matchID, 30*time.Second)
+			if err != nil {
+				continue
+			}
 			payload, err := json.Marshal(Envelope{Op: "match.found", Data: mustJSON(map[string]any{
 				"match_id": matchID,
 				"channel":  channel,
-				"ticket":   t.ID, // which of my tickets matched
+				"ticket":   t.ID,  // which of my tickets matched
+				"token":    token, // short-lived join authorization
 				"users":    users,
 			})})
 			if err != nil {

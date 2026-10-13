@@ -56,6 +56,46 @@ type RefreshClaims struct {
 	jwt.RegisteredClaims
 }
 
+// MatchClaims is the short-lived match join token
+type MatchClaims struct {
+	UserID  string `json:"uid"`
+	MatchID string `json:"mid"`
+	Type    string `json:"typ"`
+	jwt.RegisteredClaims
+}
+
+// GenerateMatchToken signs a match join token. Short TTL: tokens must be used promptly.
+func GenerateMatchToken(secret string, userID uuid.UUID, matchID string, ttl time.Duration) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &MatchClaims{
+		UserID:  userID.String(),
+		MatchID: matchID,
+		Type:    "match",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
+			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
+		},
+	})
+	return token.SignedString([]byte(secret))
+}
+
+// ParseMatchToken validates a match join token.
+func ParseMatchToken(secret, tokenString string) (*MatchClaims, bool) {
+	parsed, err := jwt.ParseWithClaims(tokenString, &MatchClaims{},
+		func(t *jwt.Token) (any, error) { return []byte(secret), nil },
+		jwt.WithExpirationRequired(),
+		jwt.WithValidMethods([]string{"HS256"}),
+	)
+	if err != nil {
+		return nil, false
+	}
+	claims, ok := parsed.Claims.(*MatchClaims)
+	if !ok || !parsed.Valid || claims.Type != "match" {
+		return nil, false
+	}
+	return claims, true
+}
+
 // GenerateRefresh signs a refresh token
 func GenerateRefresh(secret string, userID uuid.UUID, username string, ttl time.Duration) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &RefreshClaims{

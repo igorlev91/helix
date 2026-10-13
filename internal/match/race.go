@@ -80,6 +80,15 @@ func (h *RaceHandler) OnData(m *Match, msg DataMessage) {
 	}
 }
 
+// OnJoin registers a player who joined after the match started (token flow).
+func (h *RaceHandler) OnJoin(m *Match, s *session.Session) {
+	if _, ok := h.players[s.ID.String()]; !ok {
+		h.players[s.ID.String()] = &racePlayer{
+			userID: s.UserID.String(), username: s.Username, lastMoveAt: time.Now(),
+		}
+	}
+}
+
 func (h *RaceHandler) OnLeave(m *Match, s *session.Session) {
 	if p, ok := h.players[s.ID.String()]; ok {
 		p.left = true

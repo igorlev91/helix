@@ -128,6 +128,42 @@ func main() {
 	}
 
 	switch scenario {
+	case "token":
+		alice := dial("Alice", auth("dev-alice", "Alice"))
+		bob := dial("Bob", auth("dev-bob", "Bob"))
+		carol := dial("Carol", auth("dev-carol", "Carol"))
+
+		alice.send("1", "matchmaker.add", map[string]int{"min": 2, "max": 2})
+		bob.send("1", "matchmaker.add", map[string]int{"min": 2, "max": 2})
+		mA, _ := alice.waitFor("match.found", 2*time.Second)
+		tokA, _ := mA["data"].(map[string]any)["token"].(string)
+		expect("token issued", tokA != "", fmt.Sprint(mA["data"]))
+
+		// 1. Carol steals Alice's token: rejected (uid mismatch).
+		carol.send("1", "match.join", map[string]string{"token": tokA})
+		r1, _ := carol.waitForMatch("match.join", 2*time.Second, "error")
+		expect("stolen token rejected", strings.Contains(fmt.Sprint(r1["data"]), "another user"), fmt.Sprint(r1["data"]))
+
+		// 2. Garbage token: rejected.
+		carol.send("2", "match.join", map[string]string{"token": "abc.def.ghi"})
+		r2, _ := carol.waitForMatch("match.join", 2*time.Second, "error")
+		expect("forged token rejected", strings.Contains(fmt.Sprint(r2["data"]), "invalid or expired"), fmt.Sprint(r2["data"]))
+
+		// 3. Valid flow: Alice joins, match starts; Bob joins late, gets into the same match.
+		alice.send("2", "match.join", map[string]string{"token": tokA})
+		jA, ok := alice.waitForMatch("match.join", 2*time.Second, "match_id")
+		expect("alice joins with token", ok, fmt.Sprint(jA["data"]))
+		mB, _ := bob.waitFor("match.found", 2*time.Second)
+		tokB, _ := mB["data"].(map[string]any)["token"].(string)
+		bob.send("2", "match.join", map[string]string{"token": tokB})
+		jB, ok := bob.waitForMatch("match.join", 2*time.Second, "match_id")
+		expect("late join lands in same match", ok &&
+			jB["data"].(map[string]any)["match_id"] == jA["data"].(map[string]any)["match_id"], fmt.Sprint(jB["data"]))
+
+		alice.conn.Close()
+		bob.conn.Close()
+		carol.conn.Close()
+
 	case "mmq":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))
@@ -651,7 +687,13 @@ func main() {
 		mC, okC := cheater.waitFor("match.found", 2*time.Second)
 		expect("race: both matched", okA && okC, "")
 		matchID, _ := mA["data"].(map[string]any)["match_id"].(string)
-		_ = mC
+		// Match starts only when clients join with their tokens.
+		tokA, _ := mA["data"].(map[string]any)["token"].(string)
+		tokC, _ := mC["data"].(map[string]any)["token"].(string)
+		alice.send("j", "match.join", map[string]string{"token": tokA})
+		alice.waitFor("match.join", 2*time.Second)
+		cheater.send("j", "match.join", map[string]string{"token": tokC})
+		cheater.waitFor("match.join", 2*time.Second)
 
 		start := time.Now()
 		// Honest player: move 1.0 every 150 ms (6.6 u/s, under the 8 u/s cap).
@@ -695,7 +737,16 @@ func main() {
 		chB, _ := mB["data"].(map[string]any)["channel"].(string)
 		expect("same match channel", chA != "" && chA == chB, chA)
 
-		// 3. Chat over the auto-joined match channel.
+		// 2b. Join the match with the tokens (match starts on first join).
+		tokA, _ := mA["data"].(map[string]any)["token"].(string)
+		tokB, _ := mB["data"].(map[string]any)["token"].(string)
+		alice.send("2a", "match.join", map[string]string{"token": tokA})
+		jA, _ := alice.waitFor("match.join", 2*time.Second)
+		bob.send("2b", "match.join", map[string]string{"token": tokB})
+		jB, _ := bob.waitFor("match.join", 2*time.Second)
+		expect("both joined with tokens", jA != nil && jB != nil, "")
+
+		// 3. Chat over the joined match channel.
 		alice.send("3", "chat.send", map[string]string{"channel": chA, "text": "gl hf"})
 		msg, ok := bob.waitFor("chat.message", 2*time.Second)
 		expect("bob receives in-match chat", ok, fmt.Sprint(msg["data"]))

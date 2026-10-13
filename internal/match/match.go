@@ -1,6 +1,7 @@
 package match
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -25,6 +26,9 @@ type Handler interface {
 	Loop(m *Match, tick int64) bool
 	// OnData handles one input message (validate + apply to state).
 	OnData(m *Match, msg DataMessage)
+	// OnJoin registers a player who joined after Init (match token flow:
+	// the match is created on the FIRST token join, others join later).
+	OnJoin(m *Match, s *session.Session)
 	// OnLeave removes a player.
 	OnLeave(m *Match, s *session.Session)
 }
@@ -32,7 +36,7 @@ type Handler interface {
 // Match is an authoritative server-side match with its own tick loop.
 type Match struct {
 	ID       string
-	TickRate int // ticks per second (Nakama default: 10..60)
+	TickRate int // ticks per second 
 
 	mu        sync.RWMutex
 	presences map[uuid.UUID]*session.Session
@@ -112,8 +116,7 @@ func (m *Match) Broadcast(payload []byte) {
 }
 
 // run is the match goroutine: all state mutations happen here, serialized
-// by the input channel — the same single-writer discipline as Nakama's
-// match loop.
+// by the input channel — the same single-writer discipline 
 func (m *Match) run(registry *Registry) {
 	m.handler.Init(m)
 	ticker := time.NewTicker(time.Second / time.Duration(m.TickRate))
@@ -151,15 +154,28 @@ func (m *Match) Stop() {
 	}
 }
 
-// Registry tracks live matches
+// Registry tracks live matches and pending matches awaiting token joins.
 type Registry struct {
 	mu       sync.RWMutex
 	matches  map[string]*Match
+	pending  map[string]*PendingMatch
 	onFinish func(*Match)
 }
 
+// PendingMatch is a match reserved by the matchmaker: created when the
+// first matched user joins with a valid token 
+type PendingMatch struct {
+	TickRate int
+	Factory  func() Handler
+	Allowed  map[uuid.UUID]bool // user IDs the matchmaker matched
+}
+
 func NewRegistry(onFinish func(*Match)) *Registry {
-	return &Registry{matches: map[string]*Match{}, onFinish: onFinish}
+	return &Registry{
+		matches:  map[string]*Match{},
+		pending:  map[string]*PendingMatch{},
+		onFinish: onFinish,
+	}
 }
 
 // Create spawns a match with its own loop goroutine.
@@ -177,6 +193,51 @@ func (r *Registry) Create(id string, tickRate int, h Handler, players []*session
 	return m
 }
 
+// RegisterPending reserves a match for token-authorized joins.
+func (r *Registry) RegisterPending(id string, tickRate int, factory func() Handler, allowed []uuid.UUID) {
+	set := make(map[uuid.UUID]bool, len(allowed))
+	for _, u := range allowed {
+		set[u] = true
+	}
+	r.mu.Lock()
+	r.pending[id] = &PendingMatch{TickRate: tickRate, Factory: factory, Allowed: set}
+	r.mu.Unlock()
+}
+
+// ErrNotAllowed / ErrNoMatch describe join failures.
+var (
+	ErrNoMatch    = errors.New("match not found")
+	ErrNotAllowed = errors.New("not matched into this match")
+)
+
+// Join enters a match with a validated match token: the user must be in
+// the allowed set. The match is created lazily on the first join.
+func (r *Registry) Join(id string, s *session.Session) (*Match, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m, ok := r.matches[id]; ok {
+		s.MatchID = id
+		m.AddPresence(s)
+		m.handler.OnJoin(m, s)
+		return m, nil
+	}
+	p, ok := r.pending[id]
+	if !ok {
+		return nil, ErrNoMatch
+	}
+	if !p.Allowed[s.UserID] {
+		return nil, ErrNotAllowed
+	}
+	m := newMatch(id, p.TickRate, p.Factory(), r.onFinish)
+	s.MatchID = id
+	m.AddPresence(s)
+	r.matches[id] = m
+	go m.run(r)
+	m.handler.OnJoin(m, s) // Init registered only presences present at start
+	log.Printf("match %s created on first token join", id)
+	return m, nil
+}
+
 func (r *Registry) Get(id string) (*Match, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -188,4 +249,5 @@ func (r *Registry) Remove(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.matches, id)
+	delete(r.pending, id)
 }
