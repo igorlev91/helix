@@ -165,11 +165,14 @@ func main() {
 	rt.RegisterDmOps(conn, registry, tr)
 	rt.RegisterStatusOps(sr, registry)
 
+	// Session cache: validated JWTs are cached until their expiry
+	sessionCache := auth.NewSessionCache()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/ws", server.NewWsHandler(conn, registry, rt, tr, mm, matches, sr, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/ws", server.NewWsHandler(conn, registry, rt, tr, mm, matches, sr, sessionCache, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/auth/device", server.NewAuthDeviceHandler(
 		conn, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
@@ -198,9 +201,9 @@ func main() {
 		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
 	// Link/unlink providers on the authenticated account (Nakama: api_link).
 	mux.HandleFunc("/auth/link/", server.NewAuthLinkHandler(
-		conn, cfg.Session.EncryptionKey, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
+		conn, cfg.Session.EncryptionKey, sessionCache, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
 	mux.HandleFunc("/auth/unlink/", server.NewAuthLinkHandler(
-		conn, cfg.Session.EncryptionKey, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
+		conn, cfg.Session.EncryptionKey, sessionCache, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 	if node != nil {
 		mux.HandleFunc("/cluster/send", node.ReceiveHandler())

@@ -21,7 +21,7 @@ import (
 
 // NewWsHandler returns an HTTP handler that upgrades connections to WebSocket.
 // validate token -> upgrade -> create session -> register -> Consume.
-func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, matches *match.Registry, sr *status.Registry, secret string) http.HandlerFunc {
+func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr *tracker.Tracker, mm *matchmaker.Matchmaker, matches *match.Registry, sr *status.Registry, sessionCache *auth.SessionCache, secret string) http.HandlerFunc {
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -34,7 +34,7 @@ func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr 
 		if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 			token = strings.TrimPrefix(header, "Bearer ")
 		}
-		claims, ok := auth.Parse(secret, token)
+		claims, ok := sessionCache.Parse(secret, token) // cached until token expiry
 		if !ok {
 			http.Error(w, "Missing or invalid token", http.StatusUnauthorized)
 			return

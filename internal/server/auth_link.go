@@ -17,12 +17,12 @@ import (
 // authenticated user. Requests carry the session JWT as Bearer.
 
 // sessionUser validates the Authorization: Bearer header and returns the user id.
-func sessionUser(r *http.Request, secret string) (uuid.UUID, bool) {
+func sessionUser(r *http.Request, cache *auth.SessionCache, secret string) (uuid.UUID, bool) {
 	header := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if header == "" {
 		return uuid.Nil, false
 	}
-	claims, ok := auth.Parse(secret, header)
+	claims, ok := cache.Parse(secret, header)
 	if !ok {
 		return uuid.Nil, false
 	}
@@ -39,7 +39,7 @@ type linkRequest struct {
 
 // NewAuthLinkHandler builds /auth/link/<provider> and /auth/unlink/<provider>.
 // appleJWKS/audience are plumbed through for OIDC identity verification.
-func NewAuthLinkHandler(db *sql.DB, secret string,
+func NewAuthLinkHandler(db *sql.DB, secret string, sessionCache *auth.SessionCache,
 	appleJWKS *auth.JWKSClient, appleAudience string,
 	googleJWKS *auth.JWKSClient, googleAudience string) http.HandlerFunc {
 
@@ -76,7 +76,7 @@ func NewAuthLinkHandler(db *sql.DB, secret string,
 			return
 		}
 		unlink := parts[1] == "unlink"
-		userID, ok := sessionUser(r, secret)
+		userID, ok := sessionUser(r, sessionCache, secret)
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

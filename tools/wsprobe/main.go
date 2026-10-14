@@ -183,6 +183,25 @@ func main() {
 	}
 
 	switch scenario {
+	case "session":
+		tok := auth("dev-sess", "SessUser")
+		// Same token connects twice (second connect must hit the session cache).
+		c1 := dial("S1", tok)
+		c2 := dial("S2", tok)
+		c1.send("1", "who", map[string]bool{})
+		c2.send("1", "who", map[string]bool{})
+		w1, ok1 := c1.waitForMatch("who", 2*time.Second, "SessUser")
+		w2, ok2 := c2.waitForMatch("who", 2*time.Second, "SessUser")
+		expect("cached token: two live sessions", ok1 && ok2, fmt.Sprint(w1["data"], w2["data"]))
+		c1.conn.Close()
+		c2.conn.Close()
+
+		// Tampered token (flip last char) must be rejected even though a
+		// very similar token is cached — cache is exact-match by string.
+		tampered := tok[:len(tok)-2] + map[bool]string{true: "Aa", false: "Bb"}[tok[len(tok)-2:] == "Aa"]
+		_, _, err := websocket.DefaultDialer.Dial("ws://localhost:7350/ws?token="+tampered, nil)
+		expect("tampered token rejected", err != nil, "")
+
 	case "authx":
 		post := func(path, body string) (int, map[string]any) {
 			resp, err := http.Post("http://localhost:7350"+path, "application/json", strings.NewReader(body))
