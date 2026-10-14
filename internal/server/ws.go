@@ -44,6 +44,15 @@ func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr 
 			http.Error(w, "Missing or invalid token", http.StatusUnauthorized)
 			return
 		}
+		// Username is resolved LIVE from the DB: account renames propagate
+		// to new connections without reissuing tokens (the JWT only
+		// carries the user id as the durable identity).
+		username := claims.Username
+		if err := db.QueryRowContext(r.Context(),
+			`SELECT username FROM users WHERE id = $1`, userID).Scan(&username); err != nil {
+			http.Error(w, "user not found", http.StatusUnauthorized)
+			return
+		}
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -51,9 +60,9 @@ func NewWsHandler(db *sql.DB, registry *session.Registry, rt *router.Router, tr 
 			return
 		}
 
-		log.Printf("ws client connected user=%s from %s", claims.Username, r.RemoteAddr)
+		log.Printf("ws client connected user=%s from %s", username, r.RemoteAddr)
 
-		s := session.New(conn, userID, claims.Username,
+		s := session.New(conn, userID, username,
 			// onMessage: dispatch through the router
 			func(s *session.Session, data []byte) {
 				rt.Route(s, data)

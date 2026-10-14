@@ -183,6 +183,69 @@ func main() {
 	}
 
 	switch scenario {
+	case "account":
+		post := func(path, body string) (int, map[string]any) {
+			resp, err := http.Post("http://localhost:7350"+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				panic(err)
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			var out map[string]any
+			_ = json.Unmarshal(raw, &out)
+			return resp.StatusCode, out
+		}
+		bearer := func(method, path, token, body string) (int, map[string]any) {
+			req, _ := http.NewRequest(method, "http://localhost:7350"+path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				panic(err)
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			var out map[string]any
+			_ = json.Unmarshal(raw, &out)
+			return resp.StatusCode, out
+		}
+
+		// Email user for this scenario.
+		code, r0 := post("/auth/email", `{"email":"acc@helix.dev","password":"oldpass1","username":"AccUser"}`)
+		expect("setup account", code == 200, fmt.Sprint(r0))
+		tok := r0["token"].(string)
+
+		// 1. GET /account: fresh profile.
+		code, a1 := bearer("GET", "/account", tok, "")
+		expect("get account", code == 200 && a1["username"] == "AccUser", fmt.Sprint(a1))
+
+		// 2. Update: username + display_name + avatar + metadata.
+		code, a2 := bearer("POST", "/account/update", tok, `{
+			"username": "RenamedUser",
+			"display_name": "Renamed Display",
+			"avatar_url": "https://cdn.helix.dev/av.png",
+			"metadata": {"level": 7, "title": "rookie"}
+		}`)
+		expect("update account", code == 200 && a2["username"] == "RenamedUser" &&
+			a2["display_name"] == "Renamed Display", fmt.Sprint(a2))
+
+		// 3. Cached session claims dropped: WS now reports the new username.
+		c := dial("Renamed", tok)
+		c.send("1", "who", map[string]bool{})
+		who, ok := c.waitForMatch("who", 2*time.Second, "RenamedUser")
+		expect("ws sees renamed user (cache evicted)", ok, fmt.Sprint(who["data"]))
+		c.conn.Close()
+
+		// 4. Password change: wrong current -> 403, then correct.
+		code, _ = bearer("POST", "/account/password", tok, `{"current_password":"nope123","new_password":"newpass9"}`)
+		expect("wrong current password -> 403", code == 403, fmt.Sprint(code))
+		code, _ = bearer("POST", "/account/password", tok, `{"current_password":"oldpass1","new_password":"newpass9"}`)
+		expect("password changed", code == 204, fmt.Sprint(code))
+		code, _ = post("/auth/email", `{"email":"acc@helix.dev","password":"oldpass1"}`)
+		expect("old password rejected", code == 401, fmt.Sprint(code))
+		code, r1 := post("/auth/email", `{"email":"acc@helix.dev","password":"newpass9"}`)
+		expect("new password works", code == 200, fmt.Sprint(r1))
+
 	case "session":
 		tok := auth("dev-sess", "SessUser")
 		// Same token connects twice (second connect must hit the session cache).

@@ -59,6 +59,19 @@ func (c *SessionCache) Evict(tokenString string) {
 	delete(c.entries, tokenString)
 }
 
+// EvictUser drops every cached session of a user. Needed after account
+// updates (username change) so the next request re-parses fresh claims
+// instead of serving the stale cached ones.
+func (c *SessionCache) EvictUser(userID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, e := range c.entries {
+		if e.claims.UserID == userID {
+			delete(c.entries, k)
+		}
+	}
+}
+
 // Size reports cached entries (debug endpoint material).
 func (c *SessionCache) Size() int {
 	c.mu.RLock()

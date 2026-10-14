@@ -204,6 +204,9 @@ func main() {
 		conn, cfg.Session.EncryptionKey, sessionCache, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
 	mux.HandleFunc("/auth/unlink/", server.NewAuthLinkHandler(
 		conn, cfg.Session.EncryptionKey, sessionCache, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
+	mux.HandleFunc("/account", server.NewAccountHandler(conn, sessionCache, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/account/update", server.NewAccountHandler(conn, sessionCache, cfg.Session.EncryptionKey))
+	mux.HandleFunc("/account/password", server.NewAccountHandler(conn, sessionCache, cfg.Session.EncryptionKey))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 	if node != nil {
 		mux.HandleFunc("/cluster/send", node.ReceiveHandler())
