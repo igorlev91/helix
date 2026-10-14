@@ -36,7 +36,7 @@ type Handler interface {
 // Match is an authoritative server-side match with its own tick loop.
 type Match struct {
 	ID       string
-	TickRate int // ticks per second 
+	TickRate int // ticks per second
 
 	mu        sync.RWMutex
 	presences map[uuid.UUID]*session.Session
@@ -116,7 +116,7 @@ func (m *Match) Broadcast(payload []byte) {
 }
 
 // run is the match goroutine: all state mutations happen here, serialized
-// by the input channel — the same single-writer discipline 
+// by the input channel — the same single-writer discipline
 func (m *Match) run(registry *Registry) {
 	m.handler.Init(m)
 	ticker := time.NewTicker(time.Second / time.Duration(m.TickRate))
@@ -163,7 +163,7 @@ type Registry struct {
 }
 
 // PendingMatch is a match reserved by the matchmaker: created when the
-// first matched user joins with a valid token 
+// first matched user joins with a valid token
 type PendingMatch struct {
 	TickRate int
 	Factory  func() Handler

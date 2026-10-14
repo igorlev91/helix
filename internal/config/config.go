@@ -19,6 +19,17 @@ type Config struct {
 	Verbose  bool          `yaml:"verbose"`
 	Session  SessionConfig `yaml:"session"` // auth/token settings
 	Cluster  ClusterConfig `yaml:"cluster"` // multi-node fan-out
+	Auth     AuthConfig    `yaml:"auth"`    // external identity providers
+}
+
+// AuthConfig mirrors auth.* — external identity providers (email is always
+// on; Apple/Google need a client id to verify the OIDC audience).
+type AuthConfig struct {
+	GoogleClientID string `yaml:"google_client_id"`
+	AppleClientID  string `yaml:"apple_client_id"`
+	// JWKS URLs are configurable for tests (Nakama hardcodes the providers').
+	GoogleJWKSURL string `yaml:"google_jwks_url"`
+	AppleJWKSURL  string `yaml:"apple_jwks_url"`
 }
 
 // ClusterConfig mirrors cluster.* — static peer list
@@ -49,6 +60,10 @@ func Defaults() *Config {
 			RefreshEncryptionKey: "defaultrefreshencryptionkey",
 			TokenExpirySec:       3600,
 			RefreshExpirySec:     86400,
+		},
+		Auth: AuthConfig{
+			GoogleJWKSURL: "https://www.googleapis.com/oauth2/v3/certs",
+			AppleJWKSURL:  "https://appleid.apple.com/auth/keys",
 		},
 	}
 }

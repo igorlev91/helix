@@ -3,6 +3,9 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 )
 
@@ -128,6 +132,86 @@ func main() {
 	}
 
 	switch scenario {
+	case "authp":
+		// 1. Email: create account, wrong password, correct login.
+		post := func(path, body string) (int, map[string]any) {
+			resp, err := http.Post("http://localhost:7350"+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				panic(err)
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			var out map[string]any
+			_ = json.Unmarshal(raw, &out)
+			return resp.StatusCode, out
+		}
+		code, r1 := post("/auth/email", `{"email":"mail@helix.dev","password":"secret123","username":"MailUser"}`)
+		expect("email create", code == 200 && r1["created"] == true, fmt.Sprint(r1))
+		code, _ = post("/auth/email", `{"email":"mail@helix.dev","password":"wrong"}`)
+		expect("wrong password rejected", code == 401, "")
+		code, r2 := post("/auth/email", `{"email":"mail@helix.dev","password":"secret123"}`)
+		expect("email login", code == 200 && r2["username"] == "MailUser", fmt.Sprint(r2))
+
+		// 2. Local JWKS server: real RSA key, real RS256 verification path.
+		rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		nB64 := base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes())
+		eB64 := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
+		jwks := `{"keys":[{"kty":"RSA","kid":"test-key","alg":"RS256","use":"sig","n":"` + nB64 + `","e":"` + eB64 + `"}]}`
+		mux := http.NewServeMux()
+		mux.HandleFunc("/google-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jwks) })
+		mux.HandleFunc("/apple-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jwks) })
+		jwksSrv := &http.Server{Addr: ":7399", Handler: mux}
+		go jwksSrv.ListenAndServe()
+		defer jwksSrv.Close()
+
+		signOIDC := func(sub, iss, aud string) string {
+			tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+				"sub": sub, "iss": iss, "aud": aud, "email": sub + "@ext.dev",
+				"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
+			})
+			tok.Header["kid"] = "test-key"
+			s, err := tok.SignedString(rsaKey)
+			if err != nil {
+				panic(err)
+			}
+			return s
+		}
+
+		// 3. Google: valid token -> account created; same sub -> same user.
+		gTok := signOIDC("g-12345", "https://accounts.google.com", "dev-google-client")
+		code, g1 := post("/auth/google", `{"token":"`+gTok+`","username":"GoogleUser"}`)
+		expect("google create", code == 200 && g1["created"] == true, fmt.Sprint(g1))
+		code, g2 := post("/auth/google", `{"token":"`+gTok+`"}`)
+		expect("google relogin same user", code == 200 && g2["user_id"] == g1["user_id"], fmt.Sprint(g2))
+
+		// 4. Apple: valid token.
+		aTok := signOIDC("a-999", "https://appleid.apple.com", "dev-apple-client")
+		code, a1 := post("/auth/apple", `{"token":"`+aTok+`"}`)
+		expect("apple create", code == 200 && a1["created"] == true, fmt.Sprint(a1))
+
+		// 5. Wrong audience -> rejected.
+		badAud := signOIDC("g-777", "https://accounts.google.com", "someone-else")
+		code, _ = post("/auth/google", `{"token":"`+badAud+`"}`)
+		expect("wrong audience rejected", code == 401, "")
+
+		// 6. Wrong key: token signed by another RSA key -> rejected.
+		otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		t := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"sub": "g-evil", "iss": "https://accounts.google.com", "aud": "dev-google-client",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+		t.Header["kid"] = "test-key"
+		evilTok, _ := t.SignedString(otherKey)
+		code, _ = post("/auth/google", `{"token":"`+evilTok+`"}`)
+		expect("forged signature rejected", code == 401, "")
+
+		// 7. Session works over WS.
+		c := dial("MailUser", r2["token"].(string))
+		c.send("1", "who", map[string]bool{})
+		w, ok := c.waitForMatch("who", 2*time.Second, "MailUser")
+		expect("email session works on ws", ok, fmt.Sprint(w["data"]))
+		c.conn.Close()
+
 	case "token":
 		alice := dial("Alice", auth("dev-alice", "Alice"))
 		bob := dial("Bob", auth("dev-bob", "Bob"))

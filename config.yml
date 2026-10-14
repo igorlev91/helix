@@ -11,3 +11,8 @@ session:
 cluster:
   enabled: true
   peers: ["localhost:7352"]
+auth:
+  google_client_id: dev-google-client
+  apple_client_id: dev-apple-client
+  google_jwks_url: http://localhost:7399/google-jwks  # test override; prod: googleapis.com
+  apple_jwks_url: http://localhost:7399/apple-jwks    # test override; prod: appleid.apple.com

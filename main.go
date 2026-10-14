@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"helix/internal/auth"
 	"helix/internal/cluster"
 	"helix/internal/config"
 	"helix/internal/db"
@@ -176,6 +177,22 @@ func main() {
 	mux.HandleFunc("/auth/refresh", server.NewAuthRefreshHandler(
 		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second))
+	mux.HandleFunc("/auth/email", server.NewAuthEmailHandler(
+		conn, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
+		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
+	mux.HandleFunc("/auth/google", server.NewAuthOIDCHandler(
+		conn, auth.NewJWKSClient(cfg.Auth.GoogleJWKSURL),
+		"https://accounts.google.com", cfg.Auth.GoogleClientID, "google_id",
+		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
+		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
+	mux.HandleFunc("/auth/apple", server.NewAuthOIDCHandler(
+		conn, auth.NewJWKSClient(cfg.Auth.AppleJWKSURL),
+		"https://appleid.apple.com", cfg.Auth.AppleClientID, "apple_id",
+		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
+		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 	if node != nil {
 		mux.HandleFunc("/cluster/send", node.ReceiveHandler())
