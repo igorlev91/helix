@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,6 +109,14 @@ func (c *JWKSClient) key(kid string) (*rsa.PublicKey, error) {
 	return k, nil
 }
 
+// ForceRefresh drops the cached keys so the next lookup refetches.
+// Used after a signature failure: a provider may have rotated keys.
+func (c *JWKSClient) ForceRefresh() {
+	c.mu.Lock()
+	c.fetched = time.Time{}
+	c.mu.Unlock()
+}
+
 // OIDCClaims are the claims we care about from a provider ID token.
 type OIDCClaims struct {
 	Subject string `json:"sub"`
@@ -117,8 +126,19 @@ type OIDCClaims struct {
 
 // VerifyOIDCToken validates a provider ID token: RS256 signature via the
 // provider JWKS, required expiry, issuer and audience. Returns the
-// verified claims (sub = stable external user id).
+// verified claims (sub = stable external user id). On a signature failure
+// the JWKS cache is refreshed once and the token re-verified, handling
+// provider key rotation.
 func VerifyOIDCToken(jwks *JWKSClient, issuer, audience, tokenString string) (*OIDCClaims, error) {
+	claims, err := verifyOIDCTokenOnce(jwks, issuer, audience, tokenString)
+	if err != nil && strings.Contains(err.Error(), "signature") {
+		jwks.ForceRefresh()
+		claims, err = verifyOIDCTokenOnce(jwks, issuer, audience, tokenString)
+	}
+	return claims, err
+}
+
+func verifyOIDCTokenOnce(jwks *JWKSClient, issuer, audience, tokenString string) (*OIDCClaims, error) {
 	claims, err := jwt.ParseWithClaims(tokenString, &OIDCClaims{},
 		func(t *jwt.Token) (any, error) {
 			kid, _ := t.Header["kid"].(string)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,29 @@ import (
 
 	"helix/internal/auth"
 )
+
+// isUniqueViolation reports a Postgres unique constraint violation
+// (SQLSTATE 23505), which pgx surfaces in the error message.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "23505")
+}
+
+// validEmail is a pragmatic format check (no DNS validation).
+func validEmail(email string) bool {
+	at := -1
+	for i, ch := range email {
+		if ch == '@' {
+			if at != -1 {
+				return false
+			}
+			at = i
+		}
+	}
+	if at <= 0 || at >= len(email)-3 {
+		return false
+	}
+	return strings.Contains(email[at:], ".")
+}
 
 // Auth providers, mirroring Nakama's api_authenticate.go:
 //   - /auth/email  — register/login with email+password (bcrypt)
@@ -50,7 +74,7 @@ func writeSession(w http.ResponseWriter, secret, refreshSecret string,
 }
 
 // POST /auth/email {email, password, username?, create?}.
-func NewAuthEmailHandler(db *sql.DB, secret, refreshSecret string, tokenTTL, refreshTTL time.Duration) http.HandlerFunc {
+func NewAuthEmailHandler(db *sql.DB, limiter *LoginAttemptLimiter, secret, refreshSecret string, tokenTTL, refreshTTL time.Duration) http.HandlerFunc {
 	type request struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -65,6 +89,20 @@ func NewAuthEmailHandler(db *sql.DB, secret, refreshSecret string, tokenTTL, ref
 		var req request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Password == "" {
 			http.Error(w, "email and password required", http.StatusBadRequest)
+			return
+		}
+		// Input validation: a well-formed email and a non-trivial password.
+		if !validEmail(req.Email) {
+			http.Error(w, "invalid email", http.StatusBadRequest)
+			return
+		}
+		if len(req.Password) < 6 {
+			http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+			return
+		}
+		// Brute-force protection (Nakama: login attempt cache).
+		if remaining, locked := limiter.IsLocked(req.Email); locked {
+			http.Error(w, "too many attempts, retry in "+remaining.Round(time.Second).String(), http.StatusTooManyRequests)
 			return
 		}
 		create := req.Create == nil || *req.Create
@@ -96,6 +134,11 @@ func NewAuthEmailHandler(db *sql.DB, secret, refreshSecret string, tokenTTL, ref
 			if _, err := db.ExecContext(ctx,
 				`INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)`,
 				userID, username, req.Email, string(sum)); err != nil {
+				// Unique violation (email/username taken) vs a real error.
+				if isUniqueViolation(err) {
+					http.Error(w, "email or username already registered", http.StatusConflict)
+					return
+				}
 				log.Printf("auth/email: create failed: %v", err)
 				http.Error(w, "could not create user", http.StatusInternalServerError)
 				return
@@ -105,11 +148,16 @@ func NewAuthEmailHandler(db *sql.DB, secret, refreshSecret string, tokenTTL, ref
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		} else {
-			// Existing account: password must match 
+			// Existing account: password must match
 			if !hash.Valid || bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(req.Password)) != nil {
-				http.Error(w, "invalid credentials", http.StatusUnauthorized)
+				if lockFor := limiter.RecordFailure(req.Email); lockFor > 0 {
+					http.Error(w, "too many attempts, retry in "+lockFor.Round(time.Second).String(), http.StatusTooManyRequests)
+				} else {
+					http.Error(w, "invalid credentials", http.StatusUnauthorized)
+				}
 				return
 			}
+			limiter.Reset(req.Email)
 		}
 		writeSession(w, secret, refreshSecret, tokenTTL, refreshTTL, userID, username, created)
 	}

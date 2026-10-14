@@ -45,6 +45,57 @@ func auth(deviceID, username string) string {
 	return authAt(7350, deviceID, username)
 }
 
+// ---- shared helpers for auth provider scenarios ----
+
+func authDeviceToken(deviceID, username string) string {
+	r := auth(deviceID, username)
+	return r
+}
+
+func authDeviceUser(deviceID string) string {
+	body := fmt.Sprintf(`{"device_id":%q}`, deviceID)
+	resp, err := http.Post("http://localhost:7350/auth/device", "application/json", strings.NewReader(body))
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var out struct {
+		UserID string `json:"user_id"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.UserID
+}
+
+func jwksDocFor(key *rsa.PrivateKey) string {
+	nB64 := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+	eB64 := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
+	return `{"keys":[{"kty":"RSA","kid":"test-key","alg":"RS256","use":"sig","n":"` + nB64 + `","e":"` + eB64 + `"}]}`
+}
+
+// serveJWKS serves the JWKS doc on :7399 (config.yml points both
+// provider JWKS URLs there for tests).
+func serveJWKS(doc string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/google-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, doc) })
+	mux.HandleFunc("/apple-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, doc) })
+	srv := &http.Server{Addr: ":7399", Handler: mux}
+	go srv.ListenAndServe()
+}
+
+func signOIDC(key *rsa.PrivateKey, sub, iss, aud string) string {
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"sub": sub, "iss": iss, "aud": aud, "email": sub + "@ext.dev",
+		"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
+	})
+	tok.Header["kid"] = "test-key"
+	s, err := tok.SignedString(key)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func userID(deviceID string) string {
 	body := fmt.Sprintf(`{"device_id":%q}`, deviceID)
 	resp, err := http.Post("http://localhost:7350/auth/device", "application/json", strings.NewReader(body))
@@ -132,6 +183,73 @@ func main() {
 	}
 
 	switch scenario {
+	case "authx":
+		post := func(path, body string) (int, map[string]any) {
+			resp, err := http.Post("http://localhost:7350"+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				panic(err)
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			var out map[string]any
+			_ = json.Unmarshal(raw, &out)
+			return resp.StatusCode, out
+		}
+		postBearer := func(path, token, body string) int {
+			req, _ := http.NewRequest("POST", "http://localhost:7350"+path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				panic(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		code, _ := post("/auth/email", `{"email":"dup@helix.dev","password":"pass123","username":"DupUser"}`)
+		// Same email + create=true = login (Nakama semantics); a DIFFERENT
+		// email reusing the username is the unique violation -> 409.
+		code2, _ := post("/auth/email", `{"email":"other@helix.dev","password":"pass123","username":"DupUser"}`)
+		expect("taken username -> 409", code == 200 && code2 == 409, fmt.Sprint(code2))
+		code, _ = post("/auth/email", `{"email":"we@helix.dev","password":"123"}`)
+		expect("weak password -> 400", code == 400, fmt.Sprint(code))
+		code, _ = post("/auth/email", `{"email":"no-at-sign","password":"pass123"}`)
+		expect("bad email -> 400", code == 400, fmt.Sprint(code))
+
+		// Rate limit: 4 failures -> 401, 5th -> 429.
+		post("/auth/email", `{"email":"limit@helix.dev","password":"pass123","username":"LimitUser"}`)
+		var locked int
+		for i := 0; i < 5; i++ {
+			code, _ = post("/auth/email", `{"email":"limit@helix.dev","password":"wrongpass"}`)
+			if code == 429 {
+				locked = i + 1
+				break
+			}
+		}
+		expect("rate limit trips at 5th attempt", locked == 5, fmt.Sprint(locked))
+
+		// Link: device account + google identity; login via google = same user.
+		rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		jwks := jwksDocFor(rsaKey)
+		go serveJWKS(jwks)
+		tok := signOIDC(rsaKey, "gx-link", "https://accounts.google.com", "dev-google-client")
+		linkTok := authDeviceToken("dev-linktest", "LinkUser")
+		code = postBearer("/auth/link/google", linkTok, `{"token":"`+tok+`"}`)
+		expect("link google -> 204", code == 204, fmt.Sprint(code))
+		code, l1 := post("/auth/google", `{"token":"`+tok+`"}`)
+		dev := authDeviceUser("dev-linktest")
+		expect("google login resolves to linked account", code == 200 && l1["user_id"] == dev, fmt.Sprint(l1))
+
+		// Unlink: google login now creates a NEW user.
+		code = postBearer("/auth/unlink/google", linkTok, "")
+		expect("unlink google -> 204", code == 204, fmt.Sprint(code))
+		code, l2 := post("/auth/google", `{"token":"`+tok+`"}`)
+		expect("after unlink: new account", code == 200 && l2["user_id"] != dev, fmt.Sprint(l2))
+
+		// Link with stolen provider token -> 401.
+		code = postBearer("/auth/link/google", linkTok, `{"token":"garbage.token.here"}`)
+		expect("link forged token -> 401", code == 401, fmt.Sprint(code))
+
 	case "authp":
 		// 1. Email: create account, wrong password, correct login.
 		post := func(path, body string) (int, map[string]any) {
@@ -147,50 +265,31 @@ func main() {
 		}
 		code, r1 := post("/auth/email", `{"email":"mail@helix.dev","password":"secret123","username":"MailUser"}`)
 		expect("email create", code == 200 && r1["created"] == true, fmt.Sprint(r1))
-		code, _ = post("/auth/email", `{"email":"mail@helix.dev","password":"wrong"}`)
+		code, _ = post("/auth/email", `{"email":"mail@helix.dev","password":"wrongpass"}`)
 		expect("wrong password rejected", code == 401, "")
 		code, r2 := post("/auth/email", `{"email":"mail@helix.dev","password":"secret123"}`)
 		expect("email login", code == 200 && r2["username"] == "MailUser", fmt.Sprint(r2))
 
 		// 2. Local JWKS server: real RSA key, real RS256 verification path.
 		rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-		nB64 := base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes())
-		eB64 := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
-		jwks := `{"keys":[{"kty":"RSA","kid":"test-key","alg":"RS256","use":"sig","n":"` + nB64 + `","e":"` + eB64 + `"}]}`
-		mux := http.NewServeMux()
-		mux.HandleFunc("/google-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jwks) })
-		mux.HandleFunc("/apple-jwks", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jwks) })
-		jwksSrv := &http.Server{Addr: ":7399", Handler: mux}
-		go jwksSrv.ListenAndServe()
-		defer jwksSrv.Close()
+		serveJWKS(jwksDocFor(rsaKey))
 
-		signOIDC := func(sub, iss, aud string) string {
-			tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
-				"sub": sub, "iss": iss, "aud": aud, "email": sub + "@ext.dev",
-				"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
-			})
-			tok.Header["kid"] = "test-key"
-			s, err := tok.SignedString(rsaKey)
-			if err != nil {
-				panic(err)
-			}
-			return s
-		}
+		signFor := func(sub, iss, aud string) string { return signOIDC(rsaKey, sub, iss, aud) }
 
 		// 3. Google: valid token -> account created; same sub -> same user.
-		gTok := signOIDC("g-12345", "https://accounts.google.com", "dev-google-client")
+		gTok := signFor("g-12345", "https://accounts.google.com", "dev-google-client")
 		code, g1 := post("/auth/google", `{"token":"`+gTok+`","username":"GoogleUser"}`)
 		expect("google create", code == 200 && g1["created"] == true, fmt.Sprint(g1))
 		code, g2 := post("/auth/google", `{"token":"`+gTok+`"}`)
 		expect("google relogin same user", code == 200 && g2["user_id"] == g1["user_id"], fmt.Sprint(g2))
 
 		// 4. Apple: valid token.
-		aTok := signOIDC("a-999", "https://appleid.apple.com", "dev-apple-client")
+		aTok := signFor("a-999", "https://appleid.apple.com", "dev-apple-client")
 		code, a1 := post("/auth/apple", `{"token":"`+aTok+`"}`)
 		expect("apple create", code == 200 && a1["created"] == true, fmt.Sprint(a1))
 
 		// 5. Wrong audience -> rejected.
-		badAud := signOIDC("g-777", "https://accounts.google.com", "someone-else")
+		badAud := signFor("g-777", "https://accounts.google.com", "someone-else")
 		code, _ = post("/auth/google", `{"token":"`+badAud+`"}`)
 		expect("wrong audience rejected", code == 401, "")
 

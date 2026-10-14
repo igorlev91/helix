@@ -177,22 +177,30 @@ func main() {
 	mux.HandleFunc("/auth/refresh", server.NewAuthRefreshHandler(
 		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second))
+	limiter := server.NewLoginAttemptLimiter(5, time.Minute)
 	mux.HandleFunc("/auth/email", server.NewAuthEmailHandler(
-		conn, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
+		conn, limiter, cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
 		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
+	googleJWKS := auth.NewJWKSClient(cfg.Auth.GoogleJWKSURL)
+	appleJWKS := auth.NewJWKSClient(cfg.Auth.AppleJWKSURL)
 	mux.HandleFunc("/auth/google", server.NewAuthOIDCHandler(
-		conn, auth.NewJWKSClient(cfg.Auth.GoogleJWKSURL),
+		conn, googleJWKS,
 		"https://accounts.google.com", cfg.Auth.GoogleClientID, "google_id",
 		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
 		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
 	mux.HandleFunc("/auth/apple", server.NewAuthOIDCHandler(
-		conn, auth.NewJWKSClient(cfg.Auth.AppleJWKSURL),
+		conn, appleJWKS,
 		"https://appleid.apple.com", cfg.Auth.AppleClientID, "apple_id",
 		cfg.Session.EncryptionKey, cfg.Session.RefreshEncryptionKey,
 		time.Duration(cfg.Session.TokenExpirySec)*time.Second,
 		time.Duration(cfg.Session.RefreshExpirySec)*time.Second))
+	// Link/unlink providers on the authenticated account (Nakama: api_link).
+	mux.HandleFunc("/auth/link/", server.NewAuthLinkHandler(
+		conn, cfg.Session.EncryptionKey, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
+	mux.HandleFunc("/auth/unlink/", server.NewAuthLinkHandler(
+		conn, cfg.Session.EncryptionKey, appleJWKS, cfg.Auth.AppleClientID, googleJWKS, cfg.Auth.GoogleClientID))
 	mux.HandleFunc("/sessions", server.NewSessionsHandler(registry))
 	if node != nil {
 		mux.HandleFunc("/cluster/send", node.ReceiveHandler())
